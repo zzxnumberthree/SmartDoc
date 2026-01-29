@@ -1,0 +1,27 @@
+package com.spe.smartdocjp.repository;
+
+import com.spe.smartdocjp.model.entity.Document;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+
+@Repository // zeng
+public interface DocumentRepository extends JpaRepository<Document, Long>{
+
+    // 查找某用户所有未删除的文件
+    // select * from users where username = ? and is_deleted = 0     ?????
+    List<Document> findByUserIdAndIsDeletedFalse(Long userId);
+
+    // 可以不依赖自动生成
+    @Query("SELECT d FROM Document d WHERE d.user.id = :userId")
+    List<Document> findUploadedDocumentsByUserId(@Param("userId") Long userId);
+
+    // 专门用来查 回收站 的方法
+//    @Query("SELECT d FROM Document d WHERE d.isDeleted = true")
+    @Query(value = "SELECT * FROM documents WHERE is_deleted = 1", nativeQuery = true)
+    List<Document> findAllDeletedDocuments();
+
+}
