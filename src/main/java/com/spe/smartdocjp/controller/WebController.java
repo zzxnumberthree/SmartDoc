@@ -20,7 +20,7 @@ public class WebController {
     // 首页：展示列表
     @GetMapping("/")
     public String index(Model model) {
-        model.addAttribute("documents", documentService.getAllDocuments());
+        model.addAttribute("documents", documentService.getAllDocumentsForView());
         return "index"; // 对应 index.html
     }
 

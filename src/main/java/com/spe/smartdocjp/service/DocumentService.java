@@ -112,10 +112,17 @@ public class DocumentService {
     }
 
 
-    public List<Document> getAllDocuments() {
+    public List<Document> getAllDocumentsForView() {
         System.out.println("this is fileStorageLocation");
         System.out.println(fileStorageLocation);
         return documentRepository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"));
+    }
+
+    public List<DocumentDTO> getAllDocumentForApi() {
+        return documentRepository.findAll()
+                .stream()
+                .map(DocumentDTO::from)
+                .toList();
     }
 
     public void deleteDocument(Long id) {

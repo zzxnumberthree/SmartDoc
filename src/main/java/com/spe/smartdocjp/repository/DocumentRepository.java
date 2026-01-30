@@ -12,15 +12,12 @@ import java.util.List;
 public interface DocumentRepository extends JpaRepository<Document, Long>{
 
     // 查找某用户所有未删除的文件
-    // select * from users where username = ? and is_deleted = 0     ?????
-    List<Document> findByUserIdAndIsDeletedFalse(Long userId);
+    List<Document> findByUserId(Long userId);
 
-    // 可以不依赖自动生成
     @Query("SELECT d FROM Document d WHERE d.user.id = :userId")
     List<Document> findUploadedDocumentsByUserId(@Param("userId") Long userId);
 
     // 专门用来查 回收站 的方法
-//    @Query("SELECT d FROM Document d WHERE d.isDeleted = true")
     @Query(value = "SELECT * FROM documents WHERE is_deleted = 1", nativeQuery = true)
     List<Document> findAllDeletedDocuments();
 

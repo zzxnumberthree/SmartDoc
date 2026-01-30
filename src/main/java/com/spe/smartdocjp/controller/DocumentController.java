@@ -5,6 +5,7 @@ import com.spe.smartdocjp.model.DTO.DocumentDTO;
 import com.spe.smartdocjp.model.entity.Document;
 import com.spe.smartdocjp.service.AiAnalysisService;
 import com.spe.smartdocjp.service.DocumentService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -46,7 +47,7 @@ public class DocumentController {
     }
 
     @GetMapping("/findUploadedDocumentsByUserId")
-    public List<DocumentDTO> findUploadedDocumentsByUserId(@RequestParam("userId") Long id) {
+    public List<DocumentDTO> findUploadedDocumentsByUserId(@Valid @RequestParam("userId") Long id) {
         return documentService.findUploadedDocumentsByUserId(id);
     }
 
@@ -54,6 +55,12 @@ public class DocumentController {
     public List<DocumentDTO> findAllDeletedDocuments() {
         return documentService.findAllDeletedDocuments();
     }
+
+    @GetMapping("/getAllDocumentForApi")
+    public List<DocumentDTO> getAllDocumentForApi() {
+        return documentService.getAllDocumentForApi();
+    }
+
 
 
 }

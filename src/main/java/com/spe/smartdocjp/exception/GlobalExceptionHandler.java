@@ -2,12 +2,17 @@ package com.spe.smartdocjp.exception;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.validation.FieldError;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.net.URI;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 
 
 // 全局异常处理器, 拦截 Controller 层及 Filter 链中抛出的异常，统一转换为 RFC 7807 格式。
@@ -42,4 +47,18 @@ public class GlobalExceptionHandler {
 
         return problemDetail;
     }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<Map<String, String>> handleValidationExceptions(MethodArgumentNotValidException ex) {
+
+        Map<String, String> errors = new HashMap<>();
+        ex.getBindingResult().getFieldErrors().forEach(error -> {
+            errors.put(error.getField(), error.getDefaultMessage());
+        });
+
+        // 返回 400 Bad Request
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errors);
+    }
+
+
 }
