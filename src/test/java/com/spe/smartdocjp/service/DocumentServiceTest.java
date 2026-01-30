@@ -1,3 +1,5 @@
+package com.spe.smartdocjp.service;
+
 import com.spe.smartdocjp.model.entity.Document;
 import com.spe.smartdocjp.model.entity.User;
 import com.spe.smartdocjp.repository.DocumentRepository;
@@ -48,7 +50,7 @@ class DocumentServiceTest {
     void testUploadFile_Success() throws IOException {
         // 准备数据 (Arrange)
         MockMultipartFile file = new MockMultipartFile(
-                "file", "test.txt", "text/plain", "Hello World".getBytes()
+                "file", "testUploadFile_Success()test.txt", "text/plain", "This is testUploadFile_Success()".getBytes()
         );
         Long userId = 1L;
         User mockUser = new User();
