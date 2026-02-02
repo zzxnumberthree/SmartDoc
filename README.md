@@ -42,6 +42,8 @@ graph TD
     %% AOP Logic Visualization
     AOP[AOP Logging & Exception Handler] -.->|Cross-Cutting| Controller
     AOP -.->|Cross-Cutting| Service
+```
+
 ## 環境構築 (Setup)
 リポジトリをクローン: git clone...
 
@@ -74,3 +76,7 @@ participant AI as Google Gemini API
     Svc-->>Ctrl: 返回完整响应对象
     Ctrl-->>View: 更新 Model 并返回视图
     View-->>User: 渲染 AI 回复
+
+## Connect Me
+EMAIL:  zzxnumberthree@gmail.com
+
