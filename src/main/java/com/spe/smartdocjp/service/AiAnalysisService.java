@@ -13,8 +13,12 @@ public class AiAnalysisService {
 
     private final ChatClient chatClient;
 
-    // spring ai 提供了ChatClient.Builder 我们再build() 来生成chatClient
+    /**
+     Constructs the AI analysis service with a configured chat client.
+     @param builder The builder for the chat client.
+     */
     public AiAnalysisService(ChatClient.Builder builder) {
+        // spring ai 提供了ChatClient.Builder 我们再build() 来生成chatClient
         this.chatClient = builder
                 // 基本的System Prompt
                 .defaultSystem("你是一家大型IT企业里优秀的管理文档助手。")
@@ -27,7 +31,11 @@ public class AiAnalysisService {
         return chatClient.prompt("hello,who are you?").call().content();
     }
 
-
+    /**
+     Generates a structured AI summary from plain text.
+     @param documentText The text content of the document.
+     @return The AI-generated summary as a formatted string.
+     */
     public String generateSummaryFromText(String documentText) {
         // 设置提示词模板 Message Template
         String messageTemplate =
@@ -44,6 +52,11 @@ public class AiAnalysisService {
                 .content();
     }
 
+    /**
+     Generates a structured AI summary from a PDF file.
+     @param pdfResource The PDF file as a Spring Resource.
+     @return The AI-generated summary as a formatted string.
+     */
     public String generateSummaryFromPdf(Resource pdfResource) {
         // 设置提示词模板 Message Template
         String messageTemplate = """

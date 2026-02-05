@@ -33,7 +33,17 @@ public class DocumentService {
     // ./uploads 表示放在项目根目录下叫 uploads
     // 获取文件存放的根目录，转成绝对路径，清除多余..防止路径注入，适配不同平台
 
-    // 上传文件到磁盘和数据库
+    /**
+     Uploads a file, stores it on disk, analyzes it with AI, and saves the record.
+     <p>
+     The transaction ensures rollback on failure. If the database save fails,
+     the newly created file on disk is deleted.
+     @param file The uploaded file (must not be null).
+     @param userId The ID of the uploading user.
+     @return The saved document entity.
+     @throws IOException If an I/O error occurs during file handling.
+     @throws RuntimeException If the user is not found or file writing fails.
+     */
     @Transactional // 报错后能回滚
     public Document uploadDocument(MultipartFile file, Long userId) throws IOException {
         // 先确保 存储目录存在
@@ -111,13 +121,18 @@ public class DocumentService {
         return doc;
     }
 
-
+    /**
+     Returns all documents sorted by creation date (newest first).
+     @return A sorted list of all documents.
+     */
     public List<Document> getAllDocumentsForView() {
-        System.out.println("this is fileStorageLocation");
-        System.out.println(fileStorageLocation);
         return documentRepository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"));
     }
 
+    /**
+     Returns all documents as Data Transfer Objects (DTOs) for API responses.
+     @return A list of document DTOs.
+     */
     public List<DocumentDTO> getAllDocumentForApi() {
         return documentRepository.findAll()
                 .stream()
@@ -125,11 +140,20 @@ public class DocumentService {
                 .toList();
     }
 
+    /**
+     Deletes a document by its unique identifier.
+     @param id The unique ID of the document to delete.
+     */
     public void deleteDocument(Long id) {
         // 调用这行代码时，Hibernate 会自动把它转换成 UPDATE 语句
         documentRepository.deleteById(id);
     }
 
+    /**
+     Finds all documents uploaded by a specific user.
+     @param id The unique ID of the user.
+     @return A list of DTOs for the user's uploaded documents.
+     */
     public List<DocumentDTO> findUploadedDocumentsByUserId(Long id) {
         return documentRepository.findUploadedDocumentsByUserId(id)
                 .stream()
@@ -137,6 +161,10 @@ public class DocumentService {
                 .toList();
     }
 
+    /**
+     Retrieves all documents marked as deleted in the system.
+     @return A list of DTOs for deleted documents.
+     */
     public List<DocumentDTO> findAllDeletedDocuments() {
         return documentRepository.findAllDeletedDocuments()
                 .stream()

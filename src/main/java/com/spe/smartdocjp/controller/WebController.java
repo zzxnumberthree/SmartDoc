@@ -11,22 +11,38 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 
+/**
+ Web controller for serving HTML views.
+ <p>
+ Handles requests for the main page and form-based file uploads.
+ */
 @Controller // 注意：这里是 @Controller，不是 @RestController
 @RequiredArgsConstructor
 public class WebController {
 
     private final DocumentService documentService;
 
-    // 首页：展示列表
+    /**
+     Displays the main page with a list of all documents.
+     @param model The Spring MVC model.
+     @return The view name "index".
+     */
     @GetMapping("/")
     public String index(Model model) {
+        // 首页：展示列表
         model.addAttribute("documents", documentService.getAllDocumentsForView());
         return "index"; // 对应 index.html
     }
 
-    // 上传动作：处理后重定向回首页
+    /**
+     Handles file uploads from a web form and redirects to the main page.
+     @param file The uploaded file.
+     @param userId The ID of the uploading user.
+     @return A redirect to the home page ("/").
+     */
     @PostMapping("/upload-view")
     public String upload(@RequestParam("file") MultipartFile file, @RequestParam("userId") Long userId) {
+        // 上传动作：处理后重定向回首页
         try {
             documentService.uploadDocument(file, userId);
         } catch (IOException e) {

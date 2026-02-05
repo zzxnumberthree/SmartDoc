@@ -9,11 +9,17 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
 
+/**
+ Base entity class providing common fields for all JPA entities.
+ <p>
+ Includes ID, audit timestamps, and soft-delete flag. This abstract class
+ is not mapped to its own database table.
+ */
 @Getter
 @Setter
-@SuperBuilder //
-@AllArgsConstructor //
-@NoArgsConstructor //
+@SuperBuilder
+@AllArgsConstructor
+@NoArgsConstructor
 @MappedSuperclass // 告诉JPA这是一个父类，不要映射成单独的表
 @EntityListeners(AuditingEntityListener.class) // 启用自动填充时间，等多种方法
 public abstract class BaseEntity { // 不允许实例化

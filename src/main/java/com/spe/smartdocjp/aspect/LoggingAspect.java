@@ -7,6 +7,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+/**
+ Aspect for logging method execution time and exceptions in the service layer.
+ <p>
+ This aspect intercepts all methods in the service package to provide
+ consistent logging of start/end times and any thrown exceptions.
+ */
 // 作用：利用 AOP 在 Service 层方法执行前后自动打印日志，实现业务逻辑与日志记录解耦。
 @Aspect
 @Component
@@ -14,6 +20,12 @@ public class LoggingAspect {
 
     private static final Logger logger = LoggerFactory.getLogger(LoggingAspect.class);
 
+    /**
+     Logs the execution time and any exceptions of service methods.
+     @param joinPoint The join point representing the intercepted method.
+     @return The result of the method execution.
+     @throws Throwable Any exception thrown by the intercepted method.
+     */
     @Around("execution(* com.spe.smartdocjp.service..*(..))")
     public Object logExecutionTime(ProceedingJoinPoint joinPoint) throws Throwable {
         long startTime = System.currentTimeMillis();

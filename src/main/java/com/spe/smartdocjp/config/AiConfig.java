@@ -18,6 +18,10 @@ public class AiConfig {
         System.setProperty("http.proxyPort", "7890");
     }
 
+    /**
+     Creates and configures the HTTP client for Google Generative AI.
+     @return A configured Client instance.
+     */
     @Bean
     public Client googleGenAiClient(){
 

@@ -6,6 +6,12 @@ import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.SQLRestriction;
 
+/**
+ Entity representing a document in the system.
+ <p>
+ Implements soft delete via JPA annotations. All queries automatically
+ exclude logically deleted records.
+ */
 @Getter
 @Setter
 @NoArgsConstructor

@@ -4,6 +4,9 @@ import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 
+/**
+ Entity representing a user in system.
+ */
 @Entity
 @Table(name = "users") // user 是数据库保留字
 @Getter

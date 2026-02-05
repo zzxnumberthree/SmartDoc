@@ -23,11 +23,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * Step 6.5: Service 层单元测试
- * 技术栈：JUnit 5 (Jupiter) + Mockito
- * 特点：
- * 1. 使用 @ExtendWith(MockitoExtension.class) 而非 @SpringBootTest，实现轻量级快速测试。
- * 2. 模拟外部依赖，只关注 Service 自身的业务逻辑。
+ Unit tests for the DocumentService class.
  */
 // 不启动 Spring 容器, 不加载 Bean, 只用 Mockito 造对象
 @ExtendWith(MockitoExtension.class)

@@ -6,6 +6,12 @@ import jakarta.validation.constraints.Size;
 
 import java.time.LocalDateTime;
 
+/**
+ Data Transfer Object (DTO) for document information.
+ @param id The unique identifier of the document.
+ @param fileName The original filename of the document.
+ @param uploadTime The timestamp when the document was last updated.
+ */
 public record DocumentDTO(
 
     Long id,

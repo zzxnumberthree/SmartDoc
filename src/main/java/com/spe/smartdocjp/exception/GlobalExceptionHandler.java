@@ -15,10 +15,20 @@ import java.util.HashMap;
 import java.util.Map;
 
 
-// 全局异常处理器, 拦截 Controller 层及 Filter 链中抛出的异常，统一转换为 RFC 7807 格式。
+/**
+ Global exception handler that intercepts and standardizes exceptions.
+ <p>
+ Converts exceptions into RFC 7807 (Problem Details) format for consistent API error responses.
+ */
 @RestControllerAdvice
+// 全局异常处理器, 拦截 Controller 层及 Filter 链中抛出的异常，统一转换为 RFC 7807 格式。
 public class GlobalExceptionHandler {
 
+    /**
+     Handles file upload size limit exceptions.
+     @param exc The thrown MaxUploadSizeExceededException.
+     @return A ProblemDetail with HTTP 413 (Payload Too Large).
+     */
     // 处理文件上传大小超限异常, 上传文件超过properties中配置的 max-file-size。响应状态：413 Payload Too Large
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ProblemDetail handleMaxSizeException(MaxUploadSizeExceededException exc) {
@@ -33,7 +43,13 @@ public class GlobalExceptionHandler {
         return problemDetail;
     }
 
-
+    /**
+     Handles all other unexpected exceptions.
+     <p>
+     Prevents internal stack traces from being exposed to the client.
+     @param exc The caught Exception.
+     @return A ProblemDetail with HTTP 500 (Internal Server Error).
+     */
     // 处理其他所有未预期的异常, 响应状态：500 Internal Server Error 防止原始堆栈信息泄露给前端，提高安全性。
     @ExceptionHandler(Exception.class)
     public ProblemDetail handleGeneralException(Exception exc) {
@@ -48,6 +64,11 @@ public class GlobalExceptionHandler {
         return problemDetail;
     }
 
+    /**
+     Handles validation errors from @Valid annotated parameters.
+     @param ex The MethodArgumentNotValidException.
+     @return A ResponseEntity with HTTP 400 and a map of field errors.
+     */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<Map<String, String>> handleValidationExceptions(MethodArgumentNotValidException ex) {
 

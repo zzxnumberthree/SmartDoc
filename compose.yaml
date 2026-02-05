@@ -2,14 +2,14 @@ services:
   # 1. 数据库服务
   db:
     image: mysql:8.0
-    container_name: aisdms-db
+    container_name: smart_doc_db
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword  # 演示用密码，生产环境应通过.env配置
-      MYSQL_DATABASE: ai_sdms_db         # 自动创建的数据库名
-      MYSQL_USER: user
-      MYSQL_PASSWORD: password
+      MYSQL_ROOT_PASSWORD: 123456  # 演示用密码，生产环境应通过.env配置
+      MYSQL_DATABASE: smart_doc_db         # 自动创建的数据库名
+      MYSQL_USER: root
+      MYSQL_PASSWORD: 123456
     ports:
-      - "3307:3306" # 将容器的3306映射到宿主机的3307，避免和你本地MySQL冲突
+      - "3306:3306"
     volumes:
       - db_data:/var/lib/mysql # 数据持久化，防止重启后数据丢失
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
@@ -17,7 +17,7 @@ services:
   # 2. 你的 Spring Boot 应用
   app:
     build: . # 使用当前目录的 Dockerfile 构建
-    container_name: aisdms-app
+    container_name: smart-doc-app
     ports:
       - "8080:8080"
     depends_on:
@@ -25,9 +25,9 @@ services:
     environment:
       # 覆盖 application.yml 中的配置
       # 注意：这里的 host 必须写 'db' (服务名)，不能写 localhost
-      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/ai_sdms_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
-      SPRING_DATASOURCE_USERNAME: user
-      SPRING_DATASOURCE_PASSWORD: password
+      SPRING_DATASOURCE_URL: jdbc:mysql://localhost:3306/smart_doc_db?useSSL=false&&serverTimezone=Asia/Tokyo&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: 123456
       # 将 Gemini API Key 作为环境变量传入 (安全！)
       GEMINI_API_KEY: ${GEMINI_API_KEY}
 
