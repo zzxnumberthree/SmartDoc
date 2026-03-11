@@ -40,3 +40,6 @@ build/
 .env
 application-*.yml
 
+
+# Ignore uploaded files
+uploads/
