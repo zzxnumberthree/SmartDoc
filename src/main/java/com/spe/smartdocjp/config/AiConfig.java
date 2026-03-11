@@ -11,12 +11,13 @@ import java.time.Duration;
 public class AiConfig {
 
     // 在类初始化时就设置好系统代理
-    static {
-        System.setProperty("https.proxyHost", "127.0.0.1");
-        System.setProperty("https.proxyPort", "7890");
-        System.setProperty("http.proxyHost", "127.0.0.1");
-        System.setProperty("http.proxyPort", "7890");
-    }
+    // 如果在中国, 取消注释这段代码
+//    static {
+//        System.setProperty("https.proxyHost", "127.0.0.1");
+//        System.setProperty("https.proxyPort", "7890");
+//        System.setProperty("http.proxyHost", "127.0.0.1");
+//        System.setProperty("http.proxyPort", "7890");
+//    }
 
     /**
      Creates and configures the HTTP client for Google Generative AI.

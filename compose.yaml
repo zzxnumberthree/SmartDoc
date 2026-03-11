@@ -6,8 +6,6 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: 123456  # 演示用密码，生产环境应通过.env配置
       MYSQL_DATABASE: smart_doc_db         # 自动创建的数据库名
-      MYSQL_USER: root
-      MYSQL_PASSWORD: 123456
     ports:
       - "3306:3306"
     volumes:
@@ -23,13 +21,12 @@ services:
     depends_on:
       - db # 确保数据库先启动
     environment:
-      # 覆盖 application.yml 中的配置
       # 注意：这里的 host 必须写 'db' (服务名)，不能写 localhost
-      SPRING_DATASOURCE_URL: jdbc:mysql://localhost:3306/smart_doc_db?useSSL=false&&serverTimezone=Asia/Tokyo&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/smart_doc_db?useSSL=false&&serverTimezone=Asia/Tokyo&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
       SPRING_DATASOURCE_USERNAME: root
       SPRING_DATASOURCE_PASSWORD: 123456
-      # 将 Gemini API Key 作为环境变量传入 (安全！)
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      # 将 Google API Key 作为环境变量传入 (安全！)
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
 
 volumes:
   db_data:
