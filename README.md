@@ -94,15 +94,15 @@ graph TD
    設定が完了したら、以下のコマンドを実行してコンテナを起動します。
 
 データベースを起動:
+      
+      cd SmartDoc
 
       docker-compose build app
+      
+      export GOOGLE_API_KEY=ここにあなたのAPIキーを貼り付けてください
 
       docker-compose up -d
-3. 環境変数の設定
-```
- export GOOGLE_API_KEY=ここにあなたのAPIキーを貼り付けてください
-```
----
+
 
 ##  今後の展望 (Future Roadmap)
 
