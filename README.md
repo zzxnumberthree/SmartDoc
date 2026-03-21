@@ -90,21 +90,18 @@ graph TD
 1. API キーの取得
 [Google AI Studio](https://aistudio.google.com/) にアクセスし、無料の API キーを取得してください。
 
-
-2. 環境変数の設定
-プロジェクトのルートディレクトリ（`compose.yaml` と同じ階層）に `.env` という名前のファイルを作成し、取得した API キーを以下のように記述します。
-```
-# .env ファイルの内容
-GOOGLE_API_KEY=ここにあなたのAPIキーを貼り付けてください
-```
-
-3. アプリケーションの起動
+2. アプリケーションの起動
    設定が完了したら、以下のコマンドを実行してコンテナを起動します。
 
 データベースを起動:
 
-      docker-compose up -d
+      docker-compose build app
 
+      docker-compose up -d
+3. 環境変数の設定
+```
+ export GOOGLE_API_KEY=ここにあなたのAPIキーを貼り付けてください
+```
 ---
 
 ##  今後の展望 (Future Roadmap)
