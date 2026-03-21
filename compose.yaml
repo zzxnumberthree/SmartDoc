@@ -11,6 +11,11 @@ services:
     volumes:
       - db_data:/var/lib/mysql # 数据持久化，防止重启后数据丢失
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-p123456" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # 2. 你的 Spring Boot 应用
   app:
@@ -19,7 +24,8 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - db # 确保数据库先启动
+      db:
+        condition: service_healthy # 确保数据库先启动
     environment:
       # 注意：这里的 host 必须写 'db' (服务名)，不能写 localhost
       SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/smart_doc_db?useSSL=false&&serverTimezone=Asia/Tokyo&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
@@ -27,6 +33,11 @@ services:
       SPRING_DATASOURCE_PASSWORD: 123456
       # 将 Google API Key 作为环境变量传入 (安全！)
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+
+      SPRING_SQL_INIT_MODE: always
+      SPRING_JPA_DEFER_DATASOURCE_INITIALIZATION: true  # 让JPA先建表，再执行data.sql
+
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
 
 volumes:
   db_data:
