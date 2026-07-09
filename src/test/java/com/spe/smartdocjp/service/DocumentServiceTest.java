@@ -38,6 +38,9 @@ class DocumentServiceTest {
     @Mock
     private AiAnalysisService aiAnalysisService;
 
+    @Mock
+    private RagService ragService;
+
     @InjectMocks // Mockito 会自动实例化 DocumentService，并将上面的 @Mock 对象注入其中
     private DocumentService documentService;
 

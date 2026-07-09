@@ -63,6 +63,18 @@
             <artifactId>spring-ai-starter-model-google-genai</artifactId>
         </dependency>
 
+        <!-- Spring AI Vector Store (SimpleVectorStore & interfaces) -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-vector-store</artifactId>
+        </dependency>
+
+        <!-- Spring AI Document Reader for PDF -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-pdf-document-reader</artifactId>
+        </dependency>
+
         <!-- Web -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

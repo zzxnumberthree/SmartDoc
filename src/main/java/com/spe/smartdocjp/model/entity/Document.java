@@ -48,14 +48,33 @@ public class Document extends BaseEntity {
     @Column(nullable = false)
     private DocStatus status = DocStatus.uploaded;
 
+    @Column(name = "chunk_count", nullable = false)
+    @Builder.Default
+    private Integer chunkCount = 0;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "embedding_status", nullable = false)
+    @Builder.Default
+    private EmbeddingStatus embeddingStatus = EmbeddingStatus.pending;
+
     public enum DocStatus { // AI处理情况，因为需要被外部调用，所以public
         uploaded, processing, completed, failed
+    }
+
+    public enum EmbeddingStatus {
+        pending, processing, completed, failed
     }
 
     @PrePersist // 防御式编程
     public void prePersist() {
         if (status == null) {
             status = DocStatus.uploaded;
+        }
+        if (chunkCount == null) {
+            chunkCount = 0;
+        }
+        if (embeddingStatus == null) {
+            embeddingStatus = EmbeddingStatus.pending;
         }
     }
 

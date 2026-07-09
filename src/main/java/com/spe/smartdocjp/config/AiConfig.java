@@ -2,30 +2,49 @@ package com.spe.smartdocjp.config;
 
 import com.google.genai.Client;
 import com.google.genai.types.HttpOptions;
+import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
 
 @Configuration
+@Slf4j
 public class AiConfig {
 
-    // 在类初始化时就设置好系统代理
-    // 如果在中国, 取消注释这段代码，当在虚拟机中时，输入ip config，替换成主机ip
-//    static {
-//        System.setProperty("https.proxyHost", "127.0.0.1");
-//        System.setProperty("https.proxyPort", "7890");
-//        System.setProperty("http.proxyHost", "127.0.0.1");
-//        System.setProperty("http.proxyPort", "7890");
-//    }
+    @Value("${ai.proxy.host:}")
+    private String proxyHost;
+
+    @Value("${ai.proxy.port:}")
+    private String proxyPort;
+
+    @Value("${ai.proxy.enabled:false}")
+    private boolean proxyEnabled;
 
     /**
-     Creates and configures the HTTP client for Google Generative AI.
-     @return A configured Client instance.
+     * Configures the system proxy properties before the bean is initialized.
+     */
+    @PostConstruct
+    public void initProxy() {
+        if (proxyEnabled && !proxyHost.isEmpty() && !proxyPort.isEmpty()) {
+            log.info("Configuring AI analysis proxy: {}:{}", proxyHost, proxyPort);
+            System.setProperty("https.proxyHost", proxyHost);
+            System.setProperty("https.proxyPort", proxyPort);
+            System.setProperty("http.proxyHost", proxyHost);
+            System.setProperty("http.proxyPort", proxyPort);
+        } else {
+            log.info("AI analysis proxy is disabled.");
+        }
+    }
+
+    /**
+     * Creates and configures the HTTP client for Google Generative AI.
+     * @return A configured Client instance.
      */
     @Bean
-    public Client googleGenAiClient(){
-
+    public Client googleGenAiClient() {
         String googleApiKey = System.getenv("GOOGLE_API_KEY");
 
         // 1. 配置 HTTP 选项，设置超时时间
@@ -38,5 +57,28 @@ public class AiConfig {
                 .apiKey(googleApiKey)
                 .httpOptions(httpOptions)
                 .build();
+    }
+
+    /**
+     * Configures the VectorStore bean using SimpleVectorStore.
+     * @param embeddingModel The autoconfigured EmbeddingModel (Google GenAI).
+     * @return A configured VectorStore instance.
+     */
+    @Bean
+    public org.springframework.ai.vectorstore.SimpleVectorStore vectorStore(
+            org.springframework.ai.embedding.EmbeddingModel embeddingModel) {
+        log.info("Initializing SimpleVectorStore bean with EmbeddingModel: {}", embeddingModel.getClass().getSimpleName());
+        org.springframework.ai.vectorstore.SimpleVectorStore store =
+                org.springframework.ai.vectorstore.SimpleVectorStore.builder(embeddingModel).build();
+        java.io.File storeFile = new java.io.File("./uploads/vector_store.json");
+        if (storeFile.exists()) {
+            try {
+                log.info("Loading vector store from file: {}", storeFile.getAbsolutePath());
+                store.load(storeFile);
+            } catch (Exception e) {
+                log.warn("Failed to load existing vector store from file: {}", e.getMessage());
+            }
+        }
+        return store;
     }
 }

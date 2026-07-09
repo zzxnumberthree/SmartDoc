@@ -28,6 +28,7 @@ public class DocumentService {
     private final DocumentRepository documentRepository;
     private final UserRepository userRepository;
     private final AiAnalysisService aiAnalysisService;
+    private final RagService ragService;
     private final Path fileStorageLocation = Paths
             .get("./uploads").toAbsolutePath().normalize();
     // ./uploads 表示放在项目根目录下叫 uploads
@@ -111,6 +112,8 @@ public class DocumentService {
         try {
             // 将文件信息存储到数据库
             documentRepository.save(doc);
+            // 触发 RAG Embedding 与分块管线
+            ragService.embedAndStoreDocument(doc, targetLocation);
         } catch (Exception e) {
             // 捕获异常，删除刚才写进去的文件
             Files.deleteIfExists(targetLocation);
@@ -147,6 +150,12 @@ public class DocumentService {
     public void deleteDocument(Long id) {
         // 调用这行代码时，Hibernate 会自动把它转换成 UPDATE 语句
         documentRepository.deleteById(id);
+        // 同步级联清理 RAG 分块与向量库中的数据
+        try {
+            ragService.deleteDocumentChunksAndVectors(id);
+        } catch (Exception e) {
+            System.out.println("清理 RAG 向量和分块数据异常: " + e.getMessage());
+        }
     }
 
     /**

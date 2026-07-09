@@ -21,7 +21,7 @@ public class AiAnalysisService {
         // spring ai 提供了ChatClient.Builder 我们再build() 来生成chatClient
         this.chatClient = builder
                 // 基本的System Prompt
-                .defaultSystem("你是一家大型IT企业里优秀的管理文档助手。")
+                .defaultSystem("你是一家大型日本IT企业里优秀的管理文档助手，所有回答用日语输出。")
                 .build();
     }
 
