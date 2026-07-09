@@ -59,6 +59,7 @@ public class AiConfig {
                 .build();
     }
 
+
     /**
      * Configures the VectorStore bean using SimpleVectorStore.
      * @param embeddingModel The autoconfigured EmbeddingModel (Google GenAI).
@@ -80,5 +81,41 @@ public class AiConfig {
             }
         }
         return store;
+    }
+
+    /**
+     * Configures the in-memory chat memory bean for multi-turn conversations.
+     * @return A configured ChatMemory instance.
+     */
+    @Bean
+    public org.springframework.ai.chat.memory.ChatMemory chatMemory() {
+        log.info("Initializing ChatMemory bean for Agent multi-turn dialogues.");
+        return new org.springframework.ai.chat.memory.ChatMemory() {
+            private final java.util.Map<String, java.util.List<org.springframework.ai.chat.messages.Message>> store =
+                    new java.util.concurrent.ConcurrentHashMap<>();
+
+            @Override
+            public void add(String conversationId, java.util.List<org.springframework.ai.chat.messages.Message> messages) {
+                store.computeIfAbsent(conversationId, k -> new java.util.concurrent.CopyOnWriteArrayList<>()).addAll(messages);
+                java.util.List<org.springframework.ai.chat.messages.Message> list = store.get(conversationId);
+                if (list != null && list.size() > 50) {
+                    java.util.List<org.springframework.ai.chat.messages.Message> trimmed = new java.util.concurrent.CopyOnWriteArrayList<>(
+                            list.subList(list.size() - 50, list.size())
+                    );
+                    store.put(conversationId, trimmed);
+                }
+            }
+
+            @Override
+            public java.util.List<org.springframework.ai.chat.messages.Message> get(String conversationId) {
+                java.util.List<org.springframework.ai.chat.messages.Message> list = store.get(conversationId);
+                return list != null ? new java.util.ArrayList<>(list) : java.util.List.of();
+            }
+
+            @Override
+            public void clear(String conversationId) {
+                store.remove(conversationId);
+            }
+        };
     }
 }

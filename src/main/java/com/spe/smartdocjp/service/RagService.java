@@ -17,6 +17,7 @@ import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.File;
@@ -45,7 +46,7 @@ public class RagService {
      * @param doc The Document entity.
      * @param filePath The local disk path to the file.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW, noRollbackFor = Exception.class)
     public void embedAndStoreDocument(Document doc, Path filePath) {
         log.info("Starting embedding pipeline for document ID: {}, path: {}", doc.getId(), filePath);
         try {
@@ -129,7 +130,7 @@ public class RagService {
             log.error("Failed to embed and store document ID: " + doc.getId(), e);
             doc.setEmbeddingStatus(Document.EmbeddingStatus.failed);
             documentRepository.save(doc);
-            throw new RuntimeException("RAG embedding pipeline failed for document ID: " + doc.getId(), e);
+            // 遵照 GEMINI.md 规则：AI 服务调用异常优雅降级，不抛出异常中断主流程或导致事务回滚 (UnexpectedRollbackException)
         }
     }
 

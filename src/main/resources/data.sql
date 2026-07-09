@@ -1,2 +1,2 @@
-# INSERT INTO `users` (`username`, `password`, `email`, `role`, `is_deleted`, `updated_at`, `created_at`)
-# VALUES ('admin2', '123', 'admin@example.com', 'USER', 0, current_timestamp, current_timestamp);
+INSERT IGNORE INTO `users` (`id`, `username`, `password`, `email`, `role`, `is_deleted`, `updated_at`, `created_at`)
+VALUES (1, 'admin_user_1', '123456', 'admin@example.com', 'ADMIN', 0, current_timestamp, current_timestamp);
