@@ -1,11 +1,10 @@
 package com.spe.smartdocjp.service;
 
+import com.spe.smartdocjp.model.DTO.DocumentStatusDTO;
 import com.spe.smartdocjp.model.entity.Document;
 import com.spe.smartdocjp.model.entity.User;
 import com.spe.smartdocjp.repository.DocumentRepository;
 import com.spe.smartdocjp.repository.UserRepository;
-import com.spe.smartdocjp.service.AiAnalysisService;
-import com.spe.smartdocjp.service.DocumentService;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -18,14 +17,14 @@ import org.springframework.mock.web.MockMultipartFile;
 import java.io.IOException;
 import java.util.Optional;
 
-// 静态导入 Mockito 方法，提升代码可读性
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
  Unit tests for the DocumentService class.
  */
-// 不启动 Spring 容器, 不加载 Bean, 只用 Mockito 造对象
 @ExtendWith(MockitoExtension.class)
 class DocumentServiceTest {
 
@@ -41,11 +40,14 @@ class DocumentServiceTest {
     @Mock
     private RagService ragService;
 
-    @InjectMocks // Mockito 会自动实例化 DocumentService，并将上面的 @Mock 对象注入其中
+    @Mock
+    private DocumentAsyncService documentAsyncService;
+
+    @InjectMocks
     private DocumentService documentService;
 
     @Test
-    @DisplayName("测试文件上传成功场景")
+    @DisplayName("测试文件上传成功与异步任务触发场景")
     void testUploadFile_Success() throws IOException {
         // 准备数据 (Arrange)
         MockMultipartFile file = new MockMultipartFile(
@@ -54,23 +56,36 @@ class DocumentServiceTest {
         Long userId = 1L;
         User mockUser = new User();
         Document mockDocument = new Document();
+        mockDocument.setId(100L);
+        mockDocument.setStatus(Document.DocStatus.processing);
         mockUser.setId(userId);
 
-        // 定义 Mock 行为 (Stubbing) 声明规则
+        // 定义 Mock 行为 (Stubbing)
         when(userRepository.findById(userId)).thenReturn(Optional.of(mockUser));
         when(documentRepository.save(any())).thenReturn(mockDocument);
-        when(aiAnalysisService.generateSummaryFromText(anyString())).thenReturn("Mock Summary");
 
-        // 原则只调用一个方法
-        documentService.uploadDocument(file, userId);
+        Document result = documentService.uploadDocument(file, userId);
 
-        // 验证 documentRepository.save()和 AI 服务 是否被调用了 1次
+        // 验证 documentRepository.save() 和异步服务调用了 1次
         verify(documentRepository, times(1)).save(any());
-        verify(aiAnalysisService, times(1)).generateSummaryFromText(any());
+        verify(documentAsyncService, times(1)).processAiAndRagAsync(any(), any());
+        assertEquals(Document.DocStatus.processing, result.getStatus());
 
-        System.out.println("Test passed: Upload logic verified without Real DB/AI.");
+        System.out.println("Test passed: Upload verified triggering async processing without blocking.");
     }
 
+    @Test
+    @DisplayName("测试获取文档状态方法")
+    void testGetDocumentStatus() {
+        Document mockDoc = new Document();
+        mockDoc.setId(1L);
+        mockDoc.setStatus(Document.DocStatus.completed);
+        when(documentRepository.findById(1L)).thenReturn(Optional.of(mockDoc));
+
+        DocumentStatusDTO status = documentService.getDocumentStatus(1L);
+        assertNotNull(status);
+        assertEquals("completed", status.status());
+    }
 
     @Test
     @DisplayName("测试上传空文件应抛出异常")
@@ -83,6 +98,6 @@ class DocumentServiceTest {
         });
 
         // 确保失败时，不污染系统状态
-         verify(documentRepository, times(0)).save(any());
+        verify(documentRepository, times(0)).save(any());
     }
 }

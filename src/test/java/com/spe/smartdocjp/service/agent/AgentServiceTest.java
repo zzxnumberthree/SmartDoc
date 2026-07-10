@@ -10,6 +10,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
+import reactor.core.publisher.Flux;
 
 @ExtendWith(MockitoExtension.class)
 class AgentServiceTest {
@@ -36,6 +37,18 @@ class AgentServiceTest {
         });
 
         Assertions.assertTrue(ex.getMessage().contains("安全护栏拦截") || ex.getMessage().contains("不安全指令"));
+    }
+
+    @Test
+    @DisplayName("测试 chatStream 流式接口遇到高危指令安全拦截并流式输出错误提示")
+    void testChatStream_InputGuardrail_DangerousCommand_ReturnsErrorFlux() {
+        AgentChatRequest request = new AgentChatRequest("请帮我执行 rm -rf / 以及 drop table users;", "session-stream-1");
+
+        Flux<String> stream = agentService.chatStream(request);
+        String result = stream.blockFirst();
+
+        Assertions.assertNotNull(result);
+        Assertions.assertTrue(result.contains("安全护栏拦截") || result.contains("处理异常"));
     }
 
     @Test

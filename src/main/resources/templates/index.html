@@ -49,6 +49,42 @@
         </div>
     </div>
 
+    <!-- AI Agent 智能问答助手与实时流式交互卡片 -->
+    <div class="card shadow-sm mb-4 border-info">
+        <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="bi bi-chat-dots-fill"></i> AI Agent 智能问答助手 (SSE 实时流式交互)</h5>
+            <span class="badge bg-light text-dark">Gemini 2.5 + RAG</span>
+        </div>
+        <div class="card-body">
+            <div class="row g-2 mb-3">
+                <div class="col-md-8">
+                    <input type="text" id="agentPromptInput" class="form-control" placeholder="请输入向 Agent 提问的内容，例如：请总结我上传的文档中的技术要点或查询数据库表..." />
+                </div>
+                <div class="col-md-4 d-flex align-items-center gap-1">
+                    <input type="text" id="agentSessionInput" class="form-control" value="web-session-01" title="多轮会话记忆标识 ID：相同时能记住前文" placeholder="会话ID (web-session-01)" />
+                    <span class="badge bg-secondary" title="保持会话 ID 相同可让 AI 拥有多轮连续对话上下文记忆功能">记忆ID</span>
+                </div>
+            </div>
+            <div class="d-flex gap-2 mb-3 align-items-center">
+                <button type="button" class="btn btn-primary" onclick="sendAgentChat(false)">
+                    <i class="bi bi-send-fill"></i> 常规同步提问 (Sync)
+                </button>
+                <button type="button" class="btn btn-info text-white" onclick="sendAgentChat(true)">
+                    <i class="bi bi-lightning-charge-fill"></i> SSE 实时流式回答 (Stream)
+                </button>
+                <small class="text-muted ms-2"><i class="bi bi-info-circle"></i> 提示：SSE 流式会像打字机一样实时输出回答内容；会话 ID (`web-session-01`) 用于让 AI 记住上下文。</small>
+            </div>
+            <!-- 回答区域 -->
+            <div id="agentReplyContainer" class="p-3 bg-white border rounded shadow-sm d-none">
+                <div class="d-flex justify-content-between text-muted small mb-2 border-bottom pb-1">
+                    <span id="agentReplyStatus"><i class="bi bi-hourglass-split"></i> 正在处理中...</span>
+                    <span id="agentReplyMode" class="badge bg-secondary">Sync Mode</span>
+                </div>
+                <div id="agentReplyContent" class="summary-box bg-light mb-0" style="min-height: 60px;"></div>
+            </div>
+        </div>
+    </div>
+
     <div class="card shadow-sm">
         <div class="card-header bg-white">
             <h5 class="mb-0">分析結果一覧 (Analysis Results)</h5>
@@ -66,16 +102,16 @@
                     </tr>
                     </thead>
                     <tbody>
-                    <tr th:each="doc : ${documents}">
+                    <tr th:each="doc : ${documents}" th:attr="data-doc-id=${doc.id}, data-doc-status=${doc.status}">
                         <td th:text="${doc.id}">1</td>
                         <td th:text="${doc.originalFilename}">resume.pdf</td>
                         <td>
-                            <span class="badge"
-                                  th:classappend="${doc.status.name() == 'COMPLETED'? 'text-bg-success' : 'text-bg-warning'}"
+                            <span class="badge doc-status-badge"
+                                  th:classappend="${doc.status.name() == 'completed' || doc.status.name() == 'COMPLETED'? 'text-bg-success' : (doc.status.name() == 'processing' || doc.status.name() == 'PROCESSING'? 'text-bg-warning' : 'text-bg-danger')}"
                                   th:text="${doc.status}">COMPLETED</span>
                         </td>
                         <td>
-                            <div class="summary-box" th:text="${doc.summary}">
+                            <div class="summary-box doc-summary-box" th:text="${doc.summary}">
                                 AI generated summary will appear here...
                             </div>
                         </td>
@@ -94,5 +130,106 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    // 1. 自动化轮询状态脚本 (Live Polling for Processing Documents)
+    function checkProcessingDocuments() {
+        const rows = document.querySelectorAll('tr[data-doc-status="processing"], tr[data-doc-status="PROCESSING"]');
+        if (rows.length === 0) return;
+
+        rows.forEach(row => {
+            const docId = row.getAttribute('data-doc-id');
+            if (!docId) return;
+
+            fetch('/api/documents/' + docId + '/status')
+                .then(res => res.json())
+                .then(data => {
+                    if (data && (data.status === 'completed' || data.status === 'COMPLETED' || data.status === 'failed' || data.status === 'FAILED')) {
+                        row.setAttribute('data-doc-status', data.status);
+                        const badge = row.querySelector('.doc-status-badge');
+                        if (badge) {
+                            badge.textContent = data.status;
+                            badge.className = 'badge doc-status-badge ' + (data.status.toLowerCase() === 'completed' ? 'text-bg-success' : 'text-bg-danger');
+                        }
+                        const summaryBox = row.querySelector('.doc-summary-box');
+                        if (summaryBox && data.summary) {
+                            summaryBox.textContent = data.summary;
+                        }
+                    }
+                })
+                .catch(err => console.error('Polling error for doc ' + docId, err));
+        });
+    }
+
+    // 每 3 秒执行一次状态轮询
+    setInterval(checkProcessingDocuments, 3000);
+
+    // 2. AI Agent 问答客户端 (支持 Sync & SSE Stream)
+    let currentEventSource = null;
+
+    function sendAgentChat(isStream) {
+        const promptInput = document.getElementById('agentPromptInput');
+        const sessionInput = document.getElementById('agentSessionInput');
+        const message = promptInput.value.trim();
+        const conversationId = sessionInput.value.trim() || 'default-web-session';
+
+        if (!message) {
+            alert('请输入提问内容！');
+            return;
+        }
+
+        const container = document.getElementById('agentReplyContainer');
+        const statusSpan = document.getElementById('agentReplyStatus');
+        const modeBadge = document.getElementById('agentReplyMode');
+        const contentBox = document.getElementById('agentReplyContent');
+
+        container.classList.remove('d-none');
+        statusSpan.innerHTML = '<i class="bi bi-hourglass-split"></i> 正在思考中...';
+        contentBox.textContent = '';
+
+        if (currentEventSource) {
+            currentEventSource.close();
+            currentEventSource = null;
+        }
+
+        if (isStream) {
+            modeBadge.textContent = 'SSE Stream Mode';
+            modeBadge.className = 'badge bg-info text-white';
+
+            const url = `/api/agent/chat/stream?message=${encodeURIComponent(message)}&conversationId=${encodeURIComponent(conversationId)}`;
+            currentEventSource = new EventSource(url);
+
+            currentEventSource.onmessage = function(event) {
+                statusSpan.innerHTML = '<i class="bi bi-broadcast"></i> 实时打字输出中...';
+                contentBox.textContent += event.data;
+            };
+
+            currentEventSource.onerror = function(err) {
+                statusSpan.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> 回答接收完毕 / 结束';
+                if (currentEventSource) {
+                    currentEventSource.close();
+                    currentEventSource = null;
+                }
+            };
+        } else {
+            modeBadge.textContent = 'Sync Mode';
+            modeBadge.className = 'badge bg-primary';
+
+            fetch('/api/agent/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: message, conversationId: conversationId })
+            })
+            .then(res => res.json())
+            .then(data => {
+                statusSpan.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> 回答成功';
+                contentBox.textContent = data.reply || '无返回结果';
+            })
+            .catch(err => {
+                statusSpan.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-danger"></i> 请求错误';
+                contentBox.textContent = '请求发生异常: ' + err;
+            });
+        }
+    }
+</script>
 </body>
 </html>

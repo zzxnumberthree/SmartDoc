@@ -1,6 +1,7 @@
 package com.spe.smartdocjp.service;
 
 import com.spe.smartdocjp.model.DTO.DocumentDTO;
+import com.spe.smartdocjp.model.DTO.DocumentStatusDTO;
 import com.spe.smartdocjp.model.entity.Document;
 import com.spe.smartdocjp.model.entity.User;
 import com.spe.smartdocjp.repository.DocumentRepository;
@@ -31,6 +32,7 @@ public class DocumentService {
     private final UserRepository userRepository;
     private final AiAnalysisService aiAnalysisService;
     private final RagService ragService;
+    private final DocumentAsyncService documentAsyncService;
     private final Path fileStorageLocation = Paths
             .get("./uploads").toAbsolutePath().normalize();
     // ./uploads 表示放在项目根目录下叫 uploads
@@ -80,35 +82,12 @@ public class DocumentService {
         // 文件存储到磁盘的路径
         Path targetLocation = this.fileStorageLocation.resolve(sortedFilename); // resolve 自动处理不同系统的斜杠
 
-        String summary = "Not Processed Yet";
+        String summary = "正在进行 AI 摘要分析与 RAG 向量化处理...";
 
         try { // 将文件存储到磁盘，REPLACE_EXISTING 文件名冲突则覆盖
             Files.copy(file.getInputStream(), targetLocation, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
             throw new RuntimeException("文件写入失败", e);
-        }
-
-
-        // 简单的文件类型检查 (仅演示用，生产环境应检查 MIME Type)
-        try {
-            if (originalFilename.endsWith(".txt") | originalFilename.endsWith(".md") | originalFilename.endsWith(".java")) {
-                // 读取文件内容 (注意：大文件直接读入内存有风险，这里仅做 Demo)
-                String content = Files.readString(targetLocation);
-                // 调用 AI 生成摘要
-                summary = aiAnalysisService.generateSummaryFromText(content);
-            } else if (originalFilename.endsWith(".pdf")) {
-
-                Resource pdfResource = new FileSystemResource(targetLocation);
-
-                summary = aiAnalysisService.generateSummaryFromPdf(pdfResource);
-            } else {
-                summary = "Unsupported format";
-                System.out.println("Unsupported format");
-            }
-        } catch (Exception e) {
-            // AI 失败不应阻断文件上传，记录日志即可
-            // log.error("AI processing failed", e);
-            summary = "AI Processing Failed: " + e.getMessage();
         }
 
         Document doc = Document.builder()
@@ -117,12 +96,13 @@ public class DocumentService {
                 .storagePath(sortedFilename)
                 .user(user)
                 .summary(summary)
-                .status(Document.DocStatus.completed)
+                .status(Document.DocStatus.processing)
+                .embeddingStatus(Document.EmbeddingStatus.processing)
                 .isDeleted(false)
                 .build();
 
         try {
-            // 将文件信息存储到数据库
+            // 将初始文件信息存储到数据库
             documentRepository.save(doc);
         } catch (Exception e) {
             // 数据库保存失败时，删除磁盘垃圾文件并抛出回滚
@@ -131,17 +111,32 @@ public class DocumentService {
             throw e;
         }
 
-        try {
-            // 触发 RAG Embedding 与分块管线
-            ragService.embedAndStoreDocument(doc, targetLocation);
-        } catch (Exception e) {
-            // 按照 GEMINI.md 规则：AI 服务调用异常优雅降级，不中断主流程与文件上传
-            log.warn("RAG embedding pipeline failed gracefully for document ID: {}: {}", doc.getId(), e.getMessage());
-            doc.setEmbeddingStatus(Document.EmbeddingStatus.failed);
-            documentRepository.save(doc);
+        // 异步触发 AI 摘要与 RAG 嵌入分块管线：确保在数据库事务提交后才启动异步线程，避免异步线程在事务未提交前查询数据库找不到记录
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            documentAsyncService.processAiAndRagAsync(doc.getId(), targetLocation);
+                        }
+                    }
+            );
+        } else {
+            documentAsyncService.processAiAndRagAsync(doc.getId(), targetLocation);
         }
 
         return doc;
+    }
+
+    /**
+     * Retrieves the current processing status of a document.
+     * @param documentId The ID of the document.
+     * @return DTO containing status information, or null if not found.
+     */
+    public DocumentStatusDTO getDocumentStatus(Long documentId) {
+        return documentRepository.findById(documentId)
+                .map(DocumentStatusDTO::from)
+                .orElse(null);
     }
 
     /**

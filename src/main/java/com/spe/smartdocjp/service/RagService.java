@@ -173,6 +173,26 @@ public class RagService {
         }).toList();
     }
 
+    private volatile ChatClient chatClient;
+
+    private ChatClient getOrCreateChatClient() {
+        if (chatClient == null) {
+            synchronized (this) {
+                if (chatClient == null) {
+                    ChatClient.Builder builderToUse = null;
+                    try {
+                        builderToUse = chatClientBuilder.clone();
+                    } catch (Exception ignored) {}
+                    if (builderToUse == null) {
+                        builderToUse = chatClientBuilder;
+                    }
+                    chatClient = builderToUse.build();
+                }
+            }
+        }
+        return chatClient;
+    }
+
     /**
      * Answers a user question based on semantic search over stored documents.
      * @param question The user's question.
@@ -216,8 +236,8 @@ public class RagService {
 
         String finalPrompt = String.format(promptTemplate, context, question);
 
-        ChatClient chatClient = chatClientBuilder.build();
-        String answer = chatClient.prompt(finalPrompt).call().content();
+        ChatClient client = getOrCreateChatClient();
+        String answer = client.prompt(finalPrompt).call().content();
 
         return new AskResponse(answer, sources);
     }

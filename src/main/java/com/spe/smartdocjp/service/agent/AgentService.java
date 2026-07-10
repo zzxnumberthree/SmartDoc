@@ -9,6 +9,7 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Pattern;
@@ -38,6 +39,32 @@ public class AgentService {
             Pattern.DOTALL
     );
 
+    private volatile ChatClient chatClient;
+
+    /**
+     * Lazily initializes and caches the ChatClient with DocumentAgentTools using a cloned builder
+     * to prevent polluting the shared prototype builder across requests and services.
+     */
+    private ChatClient getOrCreateChatClient() {
+        if (chatClient == null) {
+            synchronized (this) {
+                if (chatClient == null) {
+                    ChatClient.Builder builderToUse = null;
+                    try {
+                        builderToUse = chatClientBuilder.clone();
+                    } catch (Exception ignored) {}
+                    if (builderToUse == null) {
+                        builderToUse = chatClientBuilder;
+                    }
+                    chatClient = builderToUse
+                            .defaultTools(documentAgentTools)
+                            .build();
+                }
+            }
+        }
+        return chatClient;
+    }
+
     /**
      * Processes a user chat request through the AI Agent with guardrails and function calling.
      * @param request The chat request with message and conversationId.
@@ -56,12 +83,10 @@ public class AgentService {
             String systemTemplate = new String(systemPromptResource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             String renderedSystemPrompt = systemTemplate.replace("{conversationId}", conversationId);
 
-            // 3. Invoke ChatClient with memory advisor and function tools
-            ChatClient chatClient = chatClientBuilder
-                    .defaultTools(documentAgentTools)
-                    .build();
+            // 3. Invoke cached and isolated ChatClient
+            ChatClient client = getOrCreateChatClient();
 
-            String aiOutput = chatClient.prompt()
+            String aiOutput = client.prompt()
                     .system(renderedSystemPrompt)
                     .user(rawMessage)
                     .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
@@ -79,6 +104,52 @@ public class AgentService {
         } catch (Exception e) {
             log.error("Error executing Agent chat pipeline for conversationId: " + conversationId, e);
             throw new RuntimeException("AI Agent 处理异常: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Processes a user chat request through the AI Agent returning a reactive stream of response chunks (SSE).
+     * @param request The chat request with message and conversationId.
+     * @return Flux of String response tokens.
+     */
+    public Flux<String> chatStream(AgentChatRequest request) {
+        String conversationId = request.getEffectiveConversationId();
+        String rawMessage = request.message();
+        log.info("Processing Agent SSE stream chat for conversationId '{}': '{}'", conversationId, rawMessage);
+
+        try {
+            // 1. Guardrail Input Validation
+            validateInputGuardrail(rawMessage);
+
+            // 2. Load and render System Prompt
+            String systemTemplate = new String(systemPromptResource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            String renderedSystemPrompt = systemTemplate.replace("{conversationId}", conversationId);
+
+            // 3. Invoke cached and isolated ChatClient with stream().content()
+            ChatClient client = getOrCreateChatClient();
+
+            return client.prompt()
+                    .system(renderedSystemPrompt)
+                    .user(rawMessage)
+                    .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
+                    .advisors(a -> a.param("chat_memory_conversation_id", conversationId)
+                                    .param("chat_memory_response_size", 30))
+                    .stream()
+                    .content()
+                    .map(this::validateOutputGuardrail)
+                    .onErrorResume(e -> {
+                        log.error("Error during Agent SSE streaming for conversationId: " + conversationId, e);
+                        if (e instanceof IllegalArgumentException) {
+                            return Flux.just("\n[［安全护栏拦截］: " + e.getMessage() + "]");
+                        }
+                        return Flux.just("\n[［AI服务连接提示］: 当前网络或大模型调用发生超时异常 (" + e.getMessage() + ")，请检查网络/API配置或稍后重试]");
+                    });
+        } catch (IllegalArgumentException e) {
+            log.warn("Guardrail intercepted SSE chat request for conversationId '{}': {}", conversationId, e.getMessage());
+            return Flux.just("[［安全护栏拦截］: " + e.getMessage() + "]");
+        } catch (Exception e) {
+            log.error("Error initiating Agent SSE streaming for conversationId: " + conversationId, e);
+            return Flux.just("[［AI服务连接提示］: " + e.getMessage() + "]");
         }
     }
 

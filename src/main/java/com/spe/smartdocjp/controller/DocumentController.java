@@ -2,11 +2,13 @@ package com.spe.smartdocjp.controller;
 
 
 import com.spe.smartdocjp.model.DTO.DocumentDTO;
+import com.spe.smartdocjp.model.DTO.DocumentStatusDTO;
 import com.spe.smartdocjp.model.entity.Document;
 import com.spe.smartdocjp.service.AiAnalysisService;
 import com.spe.smartdocjp.service.DocumentService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -40,10 +42,38 @@ public class DocumentController {
             @RequestParam("userId") Long userId) {
         try {
             Document doc = documentService.uploadDocument(file, userId);
-            return ResponseEntity.ok(doc); // 返回200
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(doc); // 返回 202 Accepted 表示已接受异步任务
         } catch (IOException e) {
-            return ResponseEntity.internalServerError().build(); // 返回500，表示服务器在处理请求时发生了意外错误
+            return ResponseEntity.internalServerError().build();
         }
+    }
+
+    /**
+     * Retrieves the async processing status of a document by path variable ID.
+     * @param id Document ID.
+     * @return DocumentStatusDTO wrapped in ResponseEntity.
+     */
+    @GetMapping("/{id}/status")
+    public ResponseEntity<DocumentStatusDTO> getStatusById(@PathVariable("id") Long id) {
+        DocumentStatusDTO statusDTO = documentService.getDocumentStatus(id);
+        if (statusDTO == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(statusDTO);
+    }
+
+    /**
+     * Retrieves the async processing status of a document by query parameter ID.
+     * @param documentId Document ID.
+     * @return DocumentStatusDTO wrapped in ResponseEntity.
+     */
+    @GetMapping("/status")
+    public ResponseEntity<DocumentStatusDTO> getStatusByQueryParam(@RequestParam("documentId") Long documentId) {
+        DocumentStatusDTO statusDTO = documentService.getDocumentStatus(documentId);
+        if (statusDTO == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(statusDTO);
     }
 
     @GetMapping("/ai/test")
