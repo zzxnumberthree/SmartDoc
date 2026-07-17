@@ -27,6 +27,7 @@ public class User extends BaseEntity { // 继承父类BaseEntity
 
     @Enumerated(EnumType.STRING) // 将枚举存为字符串 (如 "ADMIN") 而默认情况是数字，可读性差
     @Column(nullable = false)
+    @Builder.Default
     private Role role = Role.USER; // 默认值为USER
 
     // 定义简单的枚举

@@ -38,6 +38,7 @@ public abstract class BaseEntity { // 不允许实例化
     private LocalDateTime updatedAt;
 
     @Column(name = "is_deleted", nullable = false)
+    @Builder.Default
     private Boolean isDeleted = false; // 默认为未删除，与数据库对应
 
 }

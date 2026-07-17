@@ -46,6 +46,7 @@ public class Document extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
+    @Builder.Default
     private DocStatus status = DocStatus.uploaded;
 
     @Column(name = "chunk_count", nullable = false)

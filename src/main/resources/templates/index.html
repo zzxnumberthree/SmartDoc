@@ -32,16 +32,69 @@
         <i class="bi bi-check-circle-fill"></i> <span th:text="${message}"></span>
         <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     </div>
+
+    <!-- AI 可观测性与成本监控面板 (Module 4 Observability Dashboard) -->
+    <div class="card shadow-sm mb-4 border-dark">
+        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="bi bi-activity"></i> 生产级 AI 可观测性与成本控制面板 (Observability Dashboard)</h5>
+            <div>
+                <span class="badge bg-success me-2" id="obsHealthBadge"><i class="bi bi-check-circle"></i> System UP</span>
+                <button class="btn btn-sm btn-outline-light" onclick="fetchAiUsageSummary()"><i class="bi bi-arrow-clockwise"></i> 刷新数据</button>
+            </div>
+        </div>
+        <div class="card-body bg-light">
+            <div class="row text-center g-3 mb-3">
+                <div class="col-md-3">
+                    <div class="p-3 bg-white rounded border shadow-sm">
+                        <small class="text-muted d-block mb-1">今日 AI 调用总数</small>
+                        <h3 class="text-primary mb-0" id="obsTodayCalls">0</h3>
+                        <small class="text-secondary" style="font-size: 0.75rem;">累计调用: <span id="obsTotalCalls">0</span> 次</small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="p-3 bg-white rounded border shadow-sm">
+                        <small class="text-muted d-block mb-1">今日消耗 Token 数量</small>
+                        <h3 class="text-info mb-0" id="obsTodayTokens">0</h3>
+                        <small class="text-secondary" style="font-size: 0.75rem;">累计 Tokens: <span id="obsTotalTokens">0</span></small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="p-3 bg-white rounded border shadow-sm">
+                        <small class="text-muted d-block mb-1">今日估算成本 (USD)</small>
+                        <h3 class="text-success mb-0" id="obsTodayCost">$0.0000</h3>
+                        <small class="text-secondary" style="font-size: 0.75rem;">累计费用: $<span id="obsTotalCost">0.0000</span></small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="p-3 bg-white rounded border shadow-sm">
+                        <small class="text-muted d-block mb-1">单日 Token 安全预算</small>
+                        <h3 class="text-warning mb-0" id="obsBudgetPercent">0%</h3>
+                        <div class="progress mt-2" style="height: 6px;">
+                            <div class="progress-bar bg-warning" role="progressbar" id="obsProgressBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="d-flex justify-content-between align-items-center pt-2 border-top">
+                <div class="small text-muted" id="obsOperationBreakdown">
+                    <i class="bi bi-pie-chart-fill"></i> 按业务拆分：加载中...
+                </div>
+                <small class="text-secondary"><a href="/actuator/metrics/ai.calls.total" target="_blank" class="text-decoration-none"><i class="bi bi-graph-up"></i> 查看 Actuator 原始度量</a></small>
+            </div>
+        </div>
+    </div>
+
     <div class="card shadow-sm mb-4">
         <div class="card-body">
             <h5 class="card-title mb-3">ドキュメントアップロード (Document Upload)</h5>
-            <form action="/upload-view" method="post" enctype="multipart/form-data" class="row g-3">
+            <div id="uploadAlertArea"></div>
+            <form action="/upload-view" method="post" enctype="multipart/form-data" class="row g-3" id="documentUploadForm">
                 <div class="col-md-8">
-                    <input type="file" name="file" class="form-control" required>
+                    <input type="file" name="file" id="documentFileInput" class="form-control" required>
                 </div>
                 <input type="hidden" name="userId" value="1">
                 <div class="col-md-4">
-                    <button type="submit" class="btn btn-success w-100">
+                    <button type="submit" class="btn btn-success w-100" id="uploadSubmitBtn">
                         <i class="bi bi-cloud-upload"></i> Upload & Analyze
                     </button>
                 </div>
@@ -101,7 +154,7 @@
                         <th scope="col">作成日 (Date)</th>
                     </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="documentsTableBody">
                     <tr th:each="doc : ${documents}" th:attr="data-doc-id=${doc.id}, data-doc-status=${doc.status}">
                         <td th:text="${doc.id}">1</td>
                         <td th:text="${doc.originalFilename}">resume.pdf</td>
@@ -117,7 +170,7 @@
                         </td>
                         <td th:text="${#temporals.format(doc.createdAt, 'yyyy-MM-dd HH:mm')}">2026-01-20</td>
                     </tr>
-                    <tr th:if="${#lists.isEmpty(documents)}">
+                    <tr th:if="${#lists.isEmpty(documents)}" id="noDocumentsRow">
                         <td colspan="5" class="text-center py-4 text-muted">
                             まだドキュメントがありません (No documents found)
                         </td>
@@ -154,6 +207,10 @@
                         if (summaryBox && data.summary) {
                             summaryBox.textContent = data.summary;
                         }
+                        // 当后台异步 AI 摘要处理完成时，立即自动刷新顶部的 AI 可观测性度量面板
+                        if (typeof fetchAiUsageSummary === 'function') {
+                            fetchAiUsageSummary();
+                        }
                     }
                 })
                 .catch(err => console.error('Polling error for doc ' + docId, err));
@@ -162,6 +219,84 @@
 
     // 每 3 秒执行一次状态轮询
     setInterval(checkProcessingDocuments, 3000);
+
+    // 0. 异步 AJAX 文件上传监听器 (彻底避免页面跳转并实现即时进度反馈)
+    const uploadForm = document.getElementById('documentUploadForm');
+    if (uploadForm) {
+        uploadForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const fileInput = document.getElementById('documentFileInput');
+            if (!fileInput || !fileInput.files || fileInput.files.length === 0) return;
+
+            const submitBtn = document.getElementById('uploadSubmitBtn');
+            const alertArea = document.getElementById('uploadAlertArea');
+            const originalBtnText = submitBtn ? submitBtn.innerHTML : '';
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 接收提交中...';
+            }
+            if (alertArea) {
+                alertArea.innerHTML = '';
+            }
+
+            const formData = new FormData(uploadForm);
+            fetch('/api/documents/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => {
+                if (!res.ok) throw new Error('服务器响应异常 (HTTP ' + res.status + ')');
+                return res.json();
+            })
+            .then(doc => {
+                if (alertArea) {
+                    alertArea.innerHTML = '<div class="alert alert-success alert-dismissible fade show" role="alert">' +
+                        '<i class="bi bi-check-circle-fill"></i> 文件 <strong>' + (doc.originalFilename || 'document') + '</strong> 已成功上传至服务端处理队列！后台 AI 引擎正在进行异步摘要生成与 RAG 向量切分，请直接在下方表格观察状态实时完成，无需任何页面跳转与刷新。' +
+                        '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>' +
+                        '</div>';
+                }
+                if (fileInput) fileInput.value = '';
+
+                const noDocRow = document.getElementById('noDocumentsRow');
+                if (noDocRow) noDocRow.remove();
+
+                const tbody = document.getElementById('documentsTableBody');
+                if (tbody) {
+                    const newRow = document.createElement('tr');
+                    newRow.setAttribute('data-doc-id', doc.id);
+                    newRow.setAttribute('data-doc-status', doc.status || 'processing');
+                    newRow.innerHTML = `
+                        <td>${doc.id}</td>
+                        <td>${doc.originalFilename || 'document'}</td>
+                        <td>
+                            <span class="badge doc-status-badge text-bg-warning">${doc.status || 'processing'}</span>
+                        </td>
+                        <td>
+                            <div class="summary-box doc-summary-box">正在后台进行 AI 摘要与 RAG 向量切分，请稍候...</div>
+                        </td>
+                        <td>刚刚</td>
+                    `;
+                    tbody.insertBefore(newRow, tbody.firstChild);
+                }
+
+                setTimeout(checkProcessingDocuments, 1000);
+            })
+            .catch(err => {
+                if (alertArea) {
+                    alertArea.innerHTML = '<div class="alert alert-danger alert-dismissible fade show" role="alert">' +
+                        '<i class="bi bi-exclamation-triangle-fill"></i> 上传处理失败: ' + err.message +
+                        '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>' +
+                        '</div>';
+                }
+            })
+            .finally(() => {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = originalBtnText;
+                }
+            });
+        });
+    }
 
     // 2. AI Agent 问答客户端 (支持 Sync & SSE Stream)
     let currentEventSource = null;
@@ -209,6 +344,7 @@
                     currentEventSource.close();
                     currentEventSource = null;
                 }
+                fetchAiUsageSummary();
             };
         } else {
             modeBadge.textContent = 'Sync Mode';
@@ -223,13 +359,58 @@
             .then(data => {
                 statusSpan.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> 回答成功';
                 contentBox.textContent = data.reply || '无返回结果';
+                fetchAiUsageSummary();
             })
             .catch(err => {
                 statusSpan.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-danger"></i> 请求错误';
                 contentBox.textContent = '请求发生异常: ' + err;
+                fetchAiUsageSummary();
             });
         }
     }
+
+    // 3. 生产级 AI 可观测性面板数据刷新脚本 (Module 4 Observability Dashboard)
+    function fetchAiUsageSummary() {
+        fetch('/api/admin/ai-usage/summary')
+            .then(res => res.json())
+            .then(data => {
+                if (!data) return;
+                document.getElementById('obsTodayCalls').textContent = data.todayCalls || 0;
+                document.getElementById('obsTotalCalls').textContent = data.totalCalls || 0;
+                document.getElementById('obsTodayTokens').textContent = data.todayTokens || 0;
+                document.getElementById('obsTotalTokens').textContent = data.totalTokens || 0;
+                document.getElementById('obsTodayCost').textContent = '$' + (data.todayCostUsd || '0.0000');
+                document.getElementById('obsTotalCost').textContent = (data.totalCostUsd || '0.0000');
+
+                // 预算进度
+                const limit = data.dailyTokenLimit || 500000;
+                const todayTokens = data.todayTokens || 0;
+                let pct = Math.round((todayTokens / limit) * 100);
+                if (pct > 100) pct = 100;
+                document.getElementById('obsBudgetPercent').textContent = pct + '%';
+                const progressBar = document.getElementById('obsProgressBar');
+                if (progressBar) {
+                    progressBar.style.width = pct + '%';
+                    progressBar.className = 'progress-bar ' + (pct >= 90 ? 'bg-danger' : (pct >= 60 ? 'bg-warning' : 'bg-success'));
+                }
+
+                // 业务拆分徽章
+                const bd = data.callsByOperation || {};
+                let bdHtml = '<i class="bi bi-pie-chart-fill"></i> 按业务拆分：';
+                for (const [key, val] of Object.entries(bd)) {
+                    let color = key === 'SUMMARY' ? 'bg-primary' : (key === 'RAG' ? 'bg-info' : 'bg-secondary');
+                    bdHtml += `<span class="badge ${color} me-1">${key}: ${val}次</span> `;
+                }
+                if (Object.keys(bd).length === 0) {
+                    bdHtml += '<span class="text-muted">暂无调用记录</span>';
+                }
+                document.getElementById('obsOperationBreakdown').innerHTML = bdHtml;
+            })
+            .catch(err => console.error('Error fetching AI usage summary:', err));
+    }
+
+    // 页面初次加载时自动请求并显示度量统计
+    window.addEventListener('DOMContentLoaded', fetchAiUsageSummary);
 </script>
 </body>
 </html>
