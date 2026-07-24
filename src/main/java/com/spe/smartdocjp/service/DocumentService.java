@@ -57,16 +57,9 @@ public class DocumentService {
         // 先确保 存储目录存在
         Files.createDirectories(fileStorageLocation);
 
-        // 查找用户，找不到则尝试获取第一个已有用户或创建默认用户，保证不报错中断
+        // 获取当前认证用户
         User user = userRepository.findById(userId)
-                .orElseGet(() -> userRepository.findAll().stream().findFirst()
-                        .orElseGet(() -> userRepository.save(User.builder()
-                                .username("default_user_" + System.currentTimeMillis())
-                                .password("123456")
-                                .email("default@example.com")
-                                .role(User.Role.USER)
-                                .isDeleted(false)
-                                .build())));
+                .orElseThrow(() -> new RuntimeException("当前认证用户不存在 (User not found)"));
 
         // 存储前重新给文件命名 使用UUID
         String originalFilename = file.getOriginalFilename();
@@ -158,11 +151,16 @@ public class DocumentService {
                 .toList();
     }
 
-    /**
-     Deletes a document by its unique identifier.
-     @param id The unique ID of the document to delete.
-     */
     public void deleteDocument(Long id) {
+        Document doc = documentRepository.findById(id).orElseThrow(() -> new RuntimeException("Document not found"));
+        Long currentUserId = com.spe.smartdocjp.security.SecurityUtils.getCurrentUserId();
+        String role = com.spe.smartdocjp.security.SecurityUtils.getCurrentUsername(); // Actually we need Role from authorities, but let's check userId for now.
+        // Or simply:
+        if (!doc.getUser().getId().equals(currentUserId) &&
+            !org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication().getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"))) {
+            throw new org.springframework.security.access.AccessDeniedException("您只能删除自己的文档");
+        }
+        
         // 调用这行代码时，Hibernate 会自动把它转换成 UPDATE 语句
         documentRepository.deleteById(id);
         // 同步级联清理 RAG 分块与向量库中的数据

@@ -75,6 +75,30 @@ public class GlobalExceptionHandler {
      @param exc The caught Exception.
      @return A ProblemDetail with HTTP 500 (Internal Server Error).
      */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ProblemDetail handleIllegalArgumentException(IllegalArgumentException exc) {
+        log.warn("Illegal argument: {}", exc.getMessage());
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.BAD_REQUEST,
+                exc.getMessage()
+        );
+        problemDetail.setTitle("Bad Request");
+        problemDetail.setProperty("timestamp", Instant.now());
+        return problemDetail;
+    }
+
+    @ExceptionHandler(org.springframework.security.core.AuthenticationException.class)
+    public ProblemDetail handleAuthenticationException(org.springframework.security.core.AuthenticationException exc) {
+        log.warn("Authentication failed: {}", exc.getMessage());
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.UNAUTHORIZED,
+                "用户名或密码错误"
+        );
+        problemDetail.setTitle("Unauthorized");
+        problemDetail.setProperty("timestamp", Instant.now());
+        return problemDetail;
+    }
+
     // 处理其他所有未预期的异常, 响应状态：500 Internal Server Error 防止原始堆栈信息泄露给前端，提高安全性。
     @ExceptionHandler(Exception.class)
     public ProblemDetail handleGeneralException(Exception exc) {

@@ -17,7 +17,15 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@WebMvcTest(AdminController.class)
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.context.annotation.Import;
+import com.spe.smartdocjp.security.SecurityConfig;
+import com.spe.smartdocjp.security.JwtAuthenticationFilter;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+
+@SpringBootTest
+@AutoConfigureMockMvc
 class AdminControllerTest {
 
     @Autowired
@@ -28,6 +36,7 @@ class AdminControllerTest {
 
     @Test
     @DisplayName("测试 GET /api/admin/ai-usage/summary 成功返回统计 JSON")
+    @WithMockUser(roles = "ADMIN")
     void getSummary_ReturnsSummaryJson() throws Exception {
         AiUsageSummaryDTO dto = AiUsageSummaryDTO.builder()
                 .totalCalls(15L)
@@ -44,6 +53,7 @@ class AdminControllerTest {
 
         mockMvc.perform(get("/api/admin/ai-usage/summary")
                         .accept(MediaType.APPLICATION_JSON))
+                .andDo(org.springframework.test.web.servlet.result.MockMvcResultHandlers.print())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalCalls").value(15))
                 .andExpect(jsonPath("$.todayCalls").value(3))

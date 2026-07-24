@@ -38,9 +38,9 @@ public class DocumentController {
      */
     @PostMapping("/upload")
     public ResponseEntity<Document> uploadFile(
-            @RequestParam("file") MultipartFile file,
-            @RequestParam("userId") Long userId) {
+            @RequestParam("file") MultipartFile file) {
         try {
+            Long userId = com.spe.smartdocjp.security.SecurityUtils.getCurrentUserId();
             Document doc = documentService.uploadDocument(file, userId);
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(doc); // 返回 202 Accepted 表示已接受异步任务
         } catch (IOException e) {
@@ -97,7 +97,8 @@ public class DocumentController {
      @return A list of document DTOs.
      */
     @GetMapping("/findUploadedDocumentsByUserId")
-    public List<DocumentDTO> findUploadedDocumentsByUserId(@Valid @RequestParam("userId") Long id) {
+    public List<DocumentDTO> findUploadedDocumentsByUserId() {
+        Long id = com.spe.smartdocjp.security.SecurityUtils.getCurrentUserId();
         return documentService.findUploadedDocumentsByUserId(id);
     }
 

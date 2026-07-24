@@ -34,7 +34,7 @@
     </div>
 
     <!-- AI 可观测性与成本监控面板 (Module 4 Observability Dashboard) -->
-    <div class="card shadow-sm mb-4 border-dark">
+    <div class="card shadow-sm mb-4 border-dark" id="observabilityPanel">
         <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
             <h5 class="mb-0"><i class="bi bi-activity"></i> 生产级 AI 可观测性与成本控制面板 (Observability Dashboard)</h5>
             <div>
@@ -92,7 +92,6 @@
                 <div class="col-md-8">
                     <input type="file" name="file" id="documentFileInput" class="form-control" required>
                 </div>
-                <input type="hidden" name="userId" value="1">
                 <div class="col-md-4">
                     <button type="submit" class="btn btn-success w-100" id="uploadSubmitBtn">
                         <i class="bi bi-cloud-upload"></i> Upload & Analyze
@@ -193,8 +192,20 @@
             const docId = row.getAttribute('data-doc-id');
             if (!docId) return;
 
-            fetch('/api/documents/' + docId + '/status')
-                .then(res => res.json())
+            const token = localStorage.getItem('jwtToken');
+            if (!token) return;
+            fetch('/api/documents/' + docId + '/status', {
+                headers: { 'Authorization': 'Bearer ' + token }
+            })
+                .then(res => {
+                    if (res.status === 401 || res.status === 403) {
+                        if (localStorage.getItem('jwtToken')) {
+                            localStorage.removeItem('jwtToken');
+                            window.location.reload();
+                        }
+                    }
+                    return res.json();
+                })
                 .then(data => {
                     if (data && (data.status === 'completed' || data.status === 'COMPLETED' || data.status === 'failed' || data.status === 'FAILED')) {
                         row.setAttribute('data-doc-status', data.status);
@@ -207,8 +218,10 @@
                         if (summaryBox && data.summary) {
                             summaryBox.textContent = data.summary;
                         }
-                        // 当后台异步 AI 摘要处理完成时，立即自动刷新顶部的 AI 可观测性度量面板
-                        if (typeof fetchAiUsageSummary === 'function') {
+                        // 当后台异步 AI 摘要处理完成时，调用阶梯刷新确保可观测性面板完全对齐
+                        if (typeof scheduleUsageRefresh === 'function') {
+                            scheduleUsageRefresh();
+                        } else if (typeof fetchAiUsageSummary === 'function') {
                             fetchAiUsageSummary();
                         }
                     }
@@ -240,11 +253,21 @@
             }
 
             const formData = new FormData(uploadForm);
+            const token = localStorage.getItem('jwtToken');
             fetch('/api/documents/upload', {
                 method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + token
+                },
                 body: formData
             })
             .then(res => {
+                if (res.status === 401 || res.status === 403) {
+                    if (localStorage.getItem('jwtToken')) {
+                        localStorage.removeItem('jwtToken');
+                        window.location.reload();
+                    }
+                }
                 if (!res.ok) throw new Error('服务器响应异常 (HTTP ' + res.status + ')');
                 return res.json();
             })
@@ -330,7 +353,8 @@
             modeBadge.textContent = 'SSE Stream Mode';
             modeBadge.className = 'badge bg-info text-white';
 
-            const url = `/api/agent/chat/stream?message=${encodeURIComponent(message)}&conversationId=${encodeURIComponent(conversationId)}`;
+            const token = localStorage.getItem('jwtToken');
+            const url = `/api/agent/chat/stream?message=${encodeURIComponent(message)}&conversationId=${encodeURIComponent(conversationId)}&token=${encodeURIComponent(token || '')}`;
             currentEventSource = new EventSource(url);
 
             currentEventSource.onmessage = function(event) {
@@ -344,35 +368,65 @@
                     currentEventSource.close();
                     currentEventSource = null;
                 }
-                fetchAiUsageSummary();
+                scheduleUsageRefresh();
             };
         } else {
             modeBadge.textContent = 'Sync Mode';
             modeBadge.className = 'badge bg-primary';
 
+            const token = localStorage.getItem('jwtToken');
             fetch('/api/agent/chat', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token 
+                },
                 body: JSON.stringify({ message: message, conversationId: conversationId })
             })
-            .then(res => res.json())
+            .then(res => {
+                if (res.status === 401 || res.status === 403) {
+                    localStorage.removeItem('jwtToken');
+                    window.location.reload();
+                }
+                return res.json();
+            })
             .then(data => {
                 statusSpan.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> 回答成功';
                 contentBox.textContent = data.reply || '无返回结果';
-                fetchAiUsageSummary();
+                scheduleUsageRefresh();
             })
             .catch(err => {
                 statusSpan.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-danger"></i> 请求错误';
                 contentBox.textContent = '请求发生异常: ' + err;
-                fetchAiUsageSummary();
+                scheduleUsageRefresh();
             });
+        }
+    }
+
+    // 辅助函数：由于后台记账为 @Async 异步线程持久化，采用阶梯式多次刷新保证数据完全落盘对齐
+    function scheduleUsageRefresh() {
+        if (localStorage.getItem('userRole') !== 'ADMIN') return;
+        if (typeof fetchAiUsageSummary === 'function') {
+            fetchAiUsageSummary();
+            setTimeout(fetchAiUsageSummary, 600);
+            setTimeout(fetchAiUsageSummary, 1800);
         }
     }
 
     // 3. 生产级 AI 可观测性面板数据刷新脚本 (Module 4 Observability Dashboard)
     function fetchAiUsageSummary() {
-        fetch('/api/admin/ai-usage/summary')
-            .then(res => res.json())
+        const token = localStorage.getItem('jwtToken');
+        if (!token) return;
+        fetch('/api/admin/ai-usage/summary', {
+            headers: { 'Authorization': 'Bearer ' + token }
+        })
+            .then(res => {
+                if (res.status === 401 || res.status === 403) {
+                    localStorage.removeItem('jwtToken');
+                    window.location.reload();
+                }
+                return res.json();
+            })
             .then(data => {
                 if (!data) return;
                 document.getElementById('obsTodayCalls').textContent = data.todayCalls || 0;
@@ -409,8 +463,126 @@
             .catch(err => console.error('Error fetching AI usage summary:', err));
     }
 
-    // 页面初次加载时自动请求并显示度量统计
-    window.addEventListener('DOMContentLoaded', fetchAiUsageSummary);
+    // 页面初次加载时自动请求并显示度量统计 (仅管理员)
+    window.addEventListener('DOMContentLoaded', function() {
+        if (localStorage.getItem('userRole') === 'ADMIN') {
+            fetchAiUsageSummary();
+        }
+    });
+</script>
+<!-- Auth Modal (Login/Register) -->
+<div class="modal fade" id="authModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="authModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title" id="authModalLabel">欢迎来到 SmartDoc-JP</h5>
+      </div>
+      <div class="modal-body">
+        <ul class="nav nav-tabs mb-3" id="authTab" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="login-tab" data-bs-toggle="tab" data-bs-target="#login" type="button" role="tab">登录 (Login)</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="register-tab" data-bs-toggle="tab" data-bs-target="#register" type="button" role="tab">注册 (Register)</button>
+          </li>
+        </ul>
+        <div class="tab-content" id="authTabContent">
+          <!-- Login Form -->
+          <div class="tab-pane fade show active" id="login" role="tabpanel">
+            <form id="loginForm">
+              <div class="mb-3">
+                <label for="loginUsername" class="form-label">用户名</label>
+                <input type="text" class="form-control" id="loginUsername" required>
+              </div>
+              <div class="mb-3">
+                <label for="loginPassword" class="form-label">密码</label>
+                <input type="password" class="form-control" id="loginPassword" required>
+              </div>
+              <div id="loginAlert" class="text-danger mb-2"></div>
+              <button type="submit" class="btn btn-primary w-100">登录</button>
+            </form>
+          </div>
+          <!-- Register Form -->
+          <div class="tab-pane fade" id="register" role="tabpanel">
+            <form id="registerForm">
+              <div class="mb-3">
+                <label for="regUsername" class="form-label">用户名</label>
+                <input type="text" class="form-control" id="regUsername" required>
+              </div>
+              <div class="mb-3">
+                <label for="regEmail" class="form-label">邮箱</label>
+                <input type="email" class="form-control" id="regEmail" required>
+              </div>
+              <div class="mb-3">
+                <label for="regPassword" class="form-label">密码</label>
+                <input type="password" class="form-control" id="regPassword" required>
+              </div>
+              <div id="regAlert" class="text-danger mb-2"></div>
+              <button type="submit" class="btn btn-success w-100">注册</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const token = localStorage.getItem('jwtToken');
+        if (!token) {
+            const authModal = new bootstrap.Modal(document.getElementById('authModal'));
+            authModal.show();
+        } else {
+            // Check if user is admin to show/hide admin panels (optional UI enhancement)
+            const role = localStorage.getItem('userRole');
+            if (role !== 'ADMIN') {
+                const obsPanel = document.getElementById('observabilityPanel');
+                if (obsPanel) obsPanel.style.display = 'none';
+            }
+        }
+
+        document.getElementById('loginForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const u = document.getElementById('loginUsername').value;
+            const p = document.getElementById('loginPassword').value;
+            fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: u, password: p })
+            }).then(res => {
+                if (!res.ok) throw new Error('登录失败');
+                return res.json();
+            }).then(data => {
+                localStorage.setItem('jwtToken', data.token);
+                localStorage.setItem('userRole', data.role);
+                window.location.reload();
+            }).catch(err => {
+                document.getElementById('loginAlert').textContent = err.message;
+            });
+        });
+
+        document.getElementById('registerForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const u = document.getElementById('regUsername').value;
+            const em = document.getElementById('regEmail').value;
+            const p = document.getElementById('regPassword').value;
+            fetch('/api/auth/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: u, email: em, password: p })
+            }).then(res => {
+                if (!res.ok) throw new Error('注册失败');
+                return res.json();
+            }).then(data => {
+                localStorage.setItem('jwtToken', data.token);
+                localStorage.setItem('userRole', data.role);
+                window.location.reload();
+            }).catch(err => {
+                document.getElementById('regAlert').textContent = err.message;
+            });
+        });
+    });
 </script>
 </body>
 </html>

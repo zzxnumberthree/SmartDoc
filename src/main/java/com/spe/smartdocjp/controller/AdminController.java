@@ -25,6 +25,7 @@ public class AdminController {
      * @return ResponseEntity containing AiUsageSummaryDTO.
      */
     @GetMapping("/summary")
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<AiUsageSummaryDTO> getSummary() {
         log.info("REST request to get AI usage summary stats.");
         return ResponseEntity.ok(aiUsageService.getUsageSummary());
