@@ -42,18 +42,12 @@ class AiAnalysisServiceTest {
     void testRecoverAnalyzeDocument() {
         Exception mockException = new RuntimeException("API Request Timed out");
         Path mockPath = Paths.get("./dummy.txt");
-        
-        String fallbackResponse = aiAnalysisService.recoverAnalyzeDocument(mockException, mockPath, "dummy.txt");
+        com.spe.smartdocjp.service.parser.DocumentParser mockParser = org.mockito.Mockito.mock(com.spe.smartdocjp.service.parser.DocumentParser.class);
+        String fallbackResponse = aiAnalysisService.recoverAnalyzeDocument(mockException, mockParser, mockPath, "dummy.txt");
         
         assertTrue(fallbackResponse.contains("AI 服务暂时不可用，请稍后重试"));
         assertTrue(fallbackResponse.contains("API Request Timed out"));
     }
 
-    @Test
-    @DisplayName("测试不支持的文件后缀直接返回提示")
-    void testAnalyzeDocumentWithRetry_UnsupportedFormat() throws Exception {
-        Path mockPath = Paths.get("./dummy.xyz");
-        String result = aiAnalysisService.analyzeDocumentWithRetry(mockPath, "dummy.xyz");
-        assertEquals("Unsupported format: dummy.xyz", result);
-    }
+
 }

@@ -55,25 +55,9 @@ public class AiAnalysisService {
      * @throws Exception if all retry attempts fail and recover method is not triggered.
      */
     @Retryable(retryFor = {Exception.class}, maxAttempts = 2, backoff = @Backoff(delay = 1000, multiplier = 1.5))
-    public String analyzeDocumentWithRetry(Path targetLocation, String originalFilename) throws Exception {
+    public String analyzeDocumentWithRetry(com.spe.smartdocjp.service.parser.DocumentParser parser, Path targetLocation, String originalFilename) throws Exception {
         log.info("Executing AI analysis with retry for file: {}", originalFilename);
-        if (originalFilename == null) {
-            originalFilename = "";
-        }
-        String lowerFilename = originalFilename.toLowerCase();
-        if (lowerFilename.endsWith(".pdf")) {
-            Resource pdfResource = new FileSystemResource(targetLocation);
-            return generateSummaryFromPdf(pdfResource);
-        } else {
-            // 默认其它类型（txt, md, java, py, json, html, csv 等）尝试作为文本读取
-            try {
-                String content = Files.readString(targetLocation);
-                return generateSummaryFromText(content);
-            } catch (Exception e) {
-                log.warn("Cannot read file as text or unsupported format for AI summary: {}", originalFilename);
-                return "Unsupported format: " + originalFilename;
-            }
-        }
+        return parser.parseAndAnalyze(targetLocation);
     }
 
     /**
@@ -84,7 +68,7 @@ public class AiAnalysisService {
      * @return Fallback graceful message.
      */
     @Recover
-    public String recoverAnalyzeDocument(Exception e, Path targetLocation, String originalFilename) {
+    public String recoverAnalyzeDocument(Exception e, com.spe.smartdocjp.service.parser.DocumentParser parser, Path targetLocation, String originalFilename) {
         log.error("AI analysis exhausted all retries for file '{}', triggering graceful fallback. Reason: {}", originalFilename, e.getMessage());
         return "AI 服务暂时不可用，请稍后重试 (重试次数耗尽降级: " + e.getMessage() + ")";
     }

@@ -8,6 +8,8 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.nio.file.Path;
+import java.util.List;
+import com.spe.smartdocjp.service.parser.DocumentParser;
 
 /**
  * Service handling background asynchronous processing of AI analysis and RAG embedding.
@@ -21,6 +23,7 @@ public class DocumentAsyncService {
     private final DocumentRepository documentRepository;
     private final AiAnalysisService aiAnalysisService;
     private final RagService ragService;
+    private final List<DocumentParser> parsers;
 
     /**
      * Executes AI summary generation and RAG embedding in a background thread.
@@ -53,7 +56,27 @@ public class DocumentAsyncService {
             documentRepository.save(doc);
 
             // Execute AI summary with retry
-            String summary = aiAnalysisService.analyzeDocumentWithRetry(targetLocation, doc.getOriginalFilename());
+            String originalFilename = doc.getOriginalFilename() == null ? "" : doc.getOriginalFilename();
+            String extension = "";
+            if (originalFilename.contains(".")) {
+                extension = originalFilename.substring(originalFilename.lastIndexOf("."));
+            }
+
+            String summary = "Unsupported format: " + originalFilename;
+            DocumentParser matchedParser = null;
+            for (DocumentParser parser : parsers) {
+                if (parser.supports(extension)) {
+                    matchedParser = parser;
+                    break;
+                }
+            }
+
+            if (matchedParser != null) {
+                summary = aiAnalysisService.analyzeDocumentWithRetry(matchedParser, targetLocation, originalFilename);
+            } else {
+                log.warn("No suitable DocumentParser found for file: {}", originalFilename);
+            }
+
             doc.setSummary(summary);
             if (summary != null && (summary.startsWith("AI 服务暂时不可用") || summary.startsWith("Unsupported format"))) {
                 doc.setStatus(Document.DocStatus.failed);

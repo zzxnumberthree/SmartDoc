@@ -12,6 +12,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Optional;
+import java.util.List;
+import com.spe.smartdocjp.service.parser.DocumentParser;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
@@ -32,8 +34,16 @@ class DocumentAsyncServiceTest {
     @Mock
     private RagService ragService;
 
+    @Mock
+    private DocumentParser documentParser;
+
     @InjectMocks
     private DocumentAsyncService documentAsyncService;
+
+    @org.junit.jupiter.api.BeforeEach
+    void setUp() {
+        documentAsyncService = new DocumentAsyncService(documentRepository, aiAnalysisService, ragService, List.of(documentParser));
+    }
 
     @Test
     @DisplayName("测试异步管道执行成功后的文档状态变更与服务调用")
@@ -45,12 +55,13 @@ class DocumentAsyncServiceTest {
         mockDoc.setOriginalFilename("test.txt");
 
         when(documentRepository.findById(docId)).thenReturn(Optional.of(mockDoc));
-        when(aiAnalysisService.analyzeDocumentWithRetry(any(), anyString())).thenReturn("Mock Summary");
+        when(documentParser.supports(anyString())).thenReturn(true);
+        when(aiAnalysisService.analyzeDocumentWithRetry(eq(documentParser), any(), anyString())).thenReturn("Mock Summary");
 
         documentAsyncService.processAiAndRagAsync(docId, mockPath);
 
         verify(documentRepository, atLeast(2)).save(mockDoc);
-        verify(aiAnalysisService, times(1)).analyzeDocumentWithRetry(mockPath, "test.txt");
+        verify(aiAnalysisService, times(1)).analyzeDocumentWithRetry(documentParser, mockPath, "test.txt");
         verify(ragService, times(1)).embedAndStoreDocument(mockDoc, mockPath);
         assertEquals(Document.DocStatus.completed, mockDoc.getStatus());
         assertEquals("Mock Summary", mockDoc.getSummary());
@@ -66,7 +77,8 @@ class DocumentAsyncServiceTest {
         mockDoc.setOriginalFilename("test.txt");
 
         when(documentRepository.findById(docId)).thenReturn(Optional.of(mockDoc));
-        when(aiAnalysisService.analyzeDocumentWithRetry(any(), anyString()))
+        when(documentParser.supports(anyString())).thenReturn(true);
+        when(aiAnalysisService.analyzeDocumentWithRetry(eq(documentParser), any(), anyString()))
                 .thenThrow(new RuntimeException("Total Failure"));
 
         documentAsyncService.processAiAndRagAsync(docId, mockPath);

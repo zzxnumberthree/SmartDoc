@@ -55,11 +55,11 @@ class AdminControllerTest {
                         .accept(MediaType.APPLICATION_JSON))
                 .andDo(org.springframework.test.web.servlet.result.MockMvcResultHandlers.print())
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.totalCalls").value(15))
-                .andExpect(jsonPath("$.todayCalls").value(3))
-                .andExpect(jsonPath("$.totalTokens").value(8500))
-                .andExpect(jsonPath("$.todayTokens").value(2100))
-                .andExpect(jsonPath("$.dailyTokenLimit").value(500000))
-                .andExpect(jsonPath("$.callsByOperation.SUMMARY").value(15));
+                .andExpect(jsonPath("$.data.totalCalls").value(15))
+                .andExpect(jsonPath("$.data.todayCalls").value(3))
+                .andExpect(jsonPath("$.data.totalTokens").value(8500))
+                .andExpect(jsonPath("$.data.todayTokens").value(2100))
+                .andExpect(jsonPath("$.data.dailyTokenLimit").value(500000))
+                .andExpect(jsonPath("$.data.callsByOperation.SUMMARY").value(15));
     }
 }

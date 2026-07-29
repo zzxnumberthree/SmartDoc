@@ -10,6 +10,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -149,6 +151,16 @@ public class DocumentService {
                 .stream()
                 .map(DocumentDTO::from)
                 .toList();
+    }
+
+    /**
+     * Returns a paginated list of documents as DTOs.
+     * @param pageable Pagination information
+     * @return A page of document DTOs
+     */
+    public Page<DocumentDTO> getAllDocuments(Pageable pageable) {
+        return documentRepository.findAll(pageable)
+                .map(DocumentDTO::from);
     }
 
     public void deleteDocument(Long id) {
