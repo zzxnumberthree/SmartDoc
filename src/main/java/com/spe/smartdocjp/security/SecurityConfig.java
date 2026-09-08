@@ -36,6 +36,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/auth/**").permitAll() // 开放注册和登录
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll() // 开放跨域 OPTIONS 请求
                 .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll() // 开放 OpenAPI / Swagger 文档
+                .requestMatchers("/actuator/health", "/actuator/health/**").permitAll() // 容器编排只读取健康状态，不暴露详细信息
                 .requestMatchers("/actuator/**").hasRole("ADMIN") // Actuator 仅限 ADMIN
                 .requestMatchers("/api/**").authenticated() // 其他 API 需要认证
                 .anyRequest().permitAll() // 允许 Thymeleaf 静态资源及首页直接访问（首页前端会根据 Token 判断是否渲染数据）

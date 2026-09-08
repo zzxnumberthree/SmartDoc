@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 
 import java.time.Duration;
 
@@ -44,6 +45,7 @@ public class AiConfig {
      * @return A configured Client instance.
      */
     @Bean
+    @Profile("!deterministic-test")
     public Client googleGenAiClient() {
         String googleApiKey = System.getenv("GOOGLE_API_KEY");
 
@@ -64,14 +66,16 @@ public class AiConfig {
      * Configures the VectorStore bean using SimpleVectorStore.
      * @param embeddingModel The autoconfigured EmbeddingModel (Google GenAI).
      * @return A configured VectorStore instance.
-     */
+    */
     @Bean
+    @Profile("!deterministic-test")
     public org.springframework.ai.vectorstore.SimpleVectorStore vectorStore(
-            org.springframework.ai.embedding.EmbeddingModel embeddingModel) {
+            org.springframework.ai.embedding.EmbeddingModel embeddingModel,
+            @Value("${smartdoc.vector-store.file:./uploads/vector_store.json}") String vectorStoreFilePath) {
         log.info("Initializing SimpleVectorStore bean with EmbeddingModel: {}", embeddingModel.getClass().getSimpleName());
         org.springframework.ai.vectorstore.SimpleVectorStore store =
                 org.springframework.ai.vectorstore.SimpleVectorStore.builder(embeddingModel).build();
-        java.io.File storeFile = new java.io.File("./uploads/vector_store.json");
+        java.io.File storeFile = new java.io.File(vectorStoreFilePath);
         if (storeFile.exists()) {
             try {
                 log.info("Loading vector store from file: {}", storeFile.getAbsolutePath());

@@ -1,43 +1,53 @@
 services:
-  # 1. 数据库服务
   db:
-    image: mysql:8.0
-    container_name: smart_doc_db
+    image: mysql:8.0.44
     environment:
-      MYSQL_ROOT_PASSWORD: 123456  # 演示用密码，生产环境应通过.env配置
-      MYSQL_DATABASE: smart_doc_db         # 自动创建的数据库名
-    ports:
-      - "3306:3306"
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: smart_doc_db
+      MYSQL_USER: smartdoc
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
     volumes:
-      - db_data:/var/lib/mysql # 数据持久化，防止重启后数据丢失
+      - db_data:/var/lib/mysql
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     healthcheck:
-      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-p123456" ]
-      interval: 10s
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u\"$${MYSQL_USER}\" --password=\"$${MYSQL_PASSWORD}\" --silent"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      start_period: 20s
+      retries: 12
 
-  # 2. 你的 Spring Boot 应用
   app:
-    build: . # 使用当前目录的 Dockerfile 构建
-    container_name: smart-doc-app
+    build: .
+    init: true
     ports:
-      - "8080:8080"
+      - "${SMARTDOC_PORT:-8080}:8080"
     depends_on:
       db:
-        condition: service_healthy # 确保数据库先启动
+        condition: service_healthy
     environment:
-      # 注意：这里的 host 必须写 'db' (服务名)，不能写 localhost
       SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/smart_doc_db?useSSL=false&serverTimezone=Asia/Tokyo&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
-      SPRING_DATASOURCE_USERNAME: root
-      SPRING_DATASOURCE_PASSWORD: 123456
-      # 将 Google API Key 作为环境变量传入 (安全！)
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-
-      SPRING_SQL_INIT_MODE: "always"
-      SPRING_JPA_DEFER_DATASOURCE_INITIALIZATION: "true"  # 让JPA先建表，再执行data.sql
-
+      SPRING_DATASOURCE_USERNAME: smartdoc
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      SPRING_SQL_INIT_MODE: "never"
       SPRING_JPA_HIBERNATE_DDL_AUTO: "update"
+      SPRING_JPA_SHOW_SQL: "false"
+      SPRING_AI_GOOGLE_GENAI_API_KEY: ${GOOGLE_API_KEY:?Set GOOGLE_API_KEY in .env}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:?Set GOOGLE_API_KEY in .env}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      AI_PROXY_ENABLED: ${AI_PROXY_ENABLED:-false}
+      AI_PROXY_HOST: ${AI_PROXY_HOST:-}
+      AI_PROXY_PORT: ${AI_PROXY_PORT:-}
+      SMARTDOC_UPLOAD_DIR: /app/data/uploads
+      SMARTDOC_VECTOR_STORE_FILE: /app/data/vector_store.json
+    volumes:
+      - app_data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 12
 
 volumes:
   db_data:
+  app_data:

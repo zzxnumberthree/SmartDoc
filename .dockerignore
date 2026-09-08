@@ -1,0 +1,11 @@
+.git
+.github
+.agents
+.idea
+.m2-audit
+.vscode
+target
+uploads
+*.iml
+*.log
+.env

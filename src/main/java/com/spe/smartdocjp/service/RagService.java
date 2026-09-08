@@ -15,6 +15,7 @@ import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -39,7 +40,8 @@ public class RagService {
     private final ChatClient.Builder chatClientBuilder;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    private static final String STORE_FILE_PATH = "./uploads/vector_store.json";
+    @Value("${smartdoc.vector-store.file:./uploads/vector_store.json}")
+    private String storeFilePath;
 
     /**
      * Embeds and stores the given document in both the vector store and MySQL chunks table.
@@ -108,7 +110,7 @@ public class RagService {
             // Persist SimpleVectorStore to disk if applicable
             if (vectorStore instanceof SimpleVectorStore simpleStore) {
                 try {
-                    File storeFile = new File(STORE_FILE_PATH);
+                    File storeFile = new File(storeFilePath);
                     simpleStore.save(storeFile);
                     log.info("Persisted vector store to: {}", storeFile.getAbsolutePath());
                 } catch (Exception e) {
@@ -262,7 +264,7 @@ public class RagService {
 
                 if (vectorStore instanceof SimpleVectorStore simpleStore) {
                     try {
-                        File storeFile = new File(STORE_FILE_PATH);
+                        File storeFile = new File(storeFilePath);
                         simpleStore.save(storeFile);
                     } catch (Exception e) {
                         log.warn("Failed to update vector store file after deletion", e);

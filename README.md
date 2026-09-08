@@ -72,7 +72,7 @@ graph TD
 ### 2. 外部API連携と依存関係の管理 (API Integration & Dependency Management)
 **Gemini API** の統合において、レスポンスの遅延や形式の不一致に直面しました。
 
-* タイムアウト設定の最適化や、レスポンス解析処理の堅牢化を行うことで、安定したAI機能の呼び出しを実現しました。
+* 60 秒の HTTP タイムアウト、再試行、フォールバック状態を実装しました。実 Gemini の可用性・レイテンシ・品質は環境依存であり、別途 live smoke が必要です。
 * また、**Java 21** と **Spring Boot 3.4.1** の組み合わせにおける依存関係（Dependencies）の競合を解消し、モダンな開発環境を整えました。
 
 ### 3. 設計思想へのこだわり (Architectural Design)
@@ -81,34 +81,40 @@ graph TD
 ---
 
 ## 環境構築 (Setup)
-本プロジェクトは Docker Compose を使用して簡単にデプロイできます。実行する前に、Google Gemini API キーを設定する必要があります。
+
+Dockerfile と Docker Compose 設定を提供しています。Docker/Linux での実行証跡は環境ごとに確認が必要です。
 
 リポジトリをクローン: 
 
       git clone https://github.com/zzxnumberthree/SmartDoc.git
 
-1. API キーの取得
+1. API キーとローカル環境変数の設定
+
 [Google AI Studio](https://aistudio.google.com/) にアクセスし、無料の API キーを取得してください。
 
+      cp .env.example .env
+
+`.env` 内の `GOOGLE_API_KEY`、`DB_ROOT_PASSWORD`、`DB_PASSWORD`、`JWT_SECRET` を実際の値に置き換えてください。`.env` は Git の追跡対象外です。
+
 2. アプリケーションの起動
-   設定が完了したら、以下のコマンドを実行してコンテナを起動します。
 
-データベースを起動:
-      
       cd SmartDoc
+      docker compose config --quiet
+      docker compose up --build --detach --wait
+      curl --fail http://localhost:8080/actuator/health
 
-      docker-compose build app
-      
-      export GOOGLE_API_KEY=ここにあなたのAPIキーを貼り付けてください
+Linux で実 API を含む Compose smoke を実行する場合は、`.env` の値を現在の shell に export した上で次を実行します（`curl` と `jq` が必要です）。
 
-      docker-compose up -d
+      set -a
+      source .env
+      set +a
+      bash scripts/compose-smoke.sh
 
+この smoke は毎回独立した Compose project と新規 volume を使用し、health、認証、非同期アップロード、RAG、grounded Q&A、複数 SSE frame、および app 再起動後のデータ保持を確認してから一時 stack を削除します。調査のため保持する場合のみ `bash scripts/compose-smoke.sh --keep` を使用してください。
 
-##  今後の展望 (Future Roadmap)
+旧 Compose 設定で作成済みの `db_data` volume には、過去の `data.sql` による `admin_user_1` が残っている可能性があります。アップグレード時は当該ユーザーを監査し、必要に応じてパスワード変更または削除を行ってください。新設定は seed data を実行しませんが、既存データを自動削除もしません。
 
--  ドキュメント内容に基づくベクトル検索 (RAG) の実装
--  ユーザー認証機能 (Spring Security) の追加
--  フロントエンド (React/Vue) の実装
+テスト階層と各証跡の限界は `docs/TESTING.md` を参照してください。
 
 ---
 

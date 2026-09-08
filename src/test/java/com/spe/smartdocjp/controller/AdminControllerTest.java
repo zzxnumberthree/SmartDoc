@@ -2,6 +2,7 @@ package com.spe.smartdocjp.controller;
 
 import com.spe.smartdocjp.model.DTO.AiUsageSummaryDTO;
 import com.spe.smartdocjp.service.AiUsageService;
+import com.spe.smartdocjp.support.DeterministicAiTestConfiguration;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,9 +24,12 @@ import com.spe.smartdocjp.security.SecurityConfig;
 import com.spe.smartdocjp.security.JwtAuthenticationFilter;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.test.context.ActiveProfiles;
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@ActiveProfiles("deterministic-test")
+@Import(DeterministicAiTestConfiguration.class)
 class AdminControllerTest {
 
     @Autowired
@@ -61,5 +65,19 @@ class AdminControllerTest {
                 .andExpect(jsonPath("$.data.todayTokens").value(2100))
                 .andExpect(jsonPath("$.data.dailyTokenLimit").value(500000))
                 .andExpect(jsonPath("$.data.callsByOperation.SUMMARY").value(15));
+    }
+
+    @Test
+    @DisplayName("Anonymous container health probe is available without exposing protected actuator endpoints")
+    void healthProbeIsPublicButMetricsRemainProtected() throws Exception {
+        mockMvc.perform(get("/actuator/health")
+                .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"))
+                .andExpect(jsonPath("$.components").doesNotExist());
+
+        mockMvc.perform(get("/actuator/metrics")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isForbidden());
     }
 }

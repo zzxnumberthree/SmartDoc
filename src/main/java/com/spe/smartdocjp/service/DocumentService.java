@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -35,8 +36,8 @@ public class DocumentService {
     private final AiAnalysisService aiAnalysisService;
     private final RagService ragService;
     private final DocumentAsyncService documentAsyncService;
-    private final Path fileStorageLocation = Paths
-            .get("./uploads").toAbsolutePath().normalize();
+    @Value("${smartdoc.upload-dir:./uploads}")
+    private String uploadDirectory;
     // ./uploads 表示放在项目根目录下叫 uploads
     // 获取文件存放的根目录，转成绝对路径，清除多余..防止路径注入，适配不同平台
 
@@ -57,6 +58,7 @@ public class DocumentService {
             throw new RuntimeException("上传的文件不能为空 (File is empty)");
         }
         // 先确保 存储目录存在
+        Path fileStorageLocation = getFileStorageLocation();
         Files.createDirectories(fileStorageLocation);
 
         // 获取当前认证用户
@@ -75,7 +77,7 @@ public class DocumentService {
         String sortedFilename = UUID.randomUUID() + extension;
 
         // 文件存储到磁盘的路径
-        Path targetLocation = this.fileStorageLocation.resolve(sortedFilename); // resolve 自动处理不同系统的斜杠
+        Path targetLocation = fileStorageLocation.resolve(sortedFilename); // resolve 自动处理不同系统的斜杠
 
         String summary = "正在进行 AI 摘要分析与 RAG 向量化处理...";
 
@@ -179,7 +181,7 @@ public class DocumentService {
         try {
             ragService.deleteDocumentChunksAndVectors(id);
         } catch (Exception e) {
-            System.out.println("清理 RAG 向量和分块数据异常: " + e.getMessage());
+            log.warn("清理 RAG 向量和分块数据异常 (documentId={}): {}", id, e.getMessage(), e);
         }
     }
 
@@ -204,6 +206,13 @@ public class DocumentService {
                 .stream()
                 .map(DocumentDTO::from)
                 .toList();
+    }
+
+    private Path getFileStorageLocation() {
+        String configuredDirectory = uploadDirectory == null || uploadDirectory.isBlank()
+                ? "./uploads"
+                : uploadDirectory;
+        return Paths.get(configuredDirectory).toAbsolutePath().normalize();
     }
 
 
