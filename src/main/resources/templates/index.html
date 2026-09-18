@@ -206,7 +206,8 @@
                     }
                     return res.json();
                 })
-                .then(data => {
+                .then(responseData => {
+                    const data = responseData.data;
                     if (data && (data.status === 'completed' || data.status === 'COMPLETED' || data.status === 'failed' || data.status === 'FAILED')) {
                         row.setAttribute('data-doc-status', data.status);
                         const badge = row.querySelector('.doc-status-badge');
@@ -271,10 +272,11 @@
                 if (!res.ok) throw new Error('服务器响应异常 (HTTP ' + res.status + ')');
                 return res.json();
             })
-            .then(doc => {
+            .then(responseData => {
+                const doc = responseData.data;
                 if (alertArea) {
                     alertArea.innerHTML = '<div class="alert alert-success alert-dismissible fade show" role="alert">' +
-                        '<i class="bi bi-check-circle-fill"></i> 文件 <strong>' + (doc.originalFilename || 'document') + '</strong> 已成功上传至服务端处理队列！后台 AI 引擎正在进行异步摘要生成与 RAG 向量切分，请直接在下方表格观察状态实时完成，无需任何页面跳转与刷新。' +
+                        '<i class="bi bi-check-circle-fill"></i> 文件 <strong>' + (doc.fileName || 'document') + '</strong> 已成功上传至服务端处理队列！后台 AI 引擎正在进行异步摘要生成与 RAG 向量切分，请直接在下方表格观察状态实时完成，无需任何页面跳转与刷新。' +
                         '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>' +
                         '</div>';
                 }
@@ -290,7 +292,7 @@
                     newRow.setAttribute('data-doc-status', doc.status || 'processing');
                     newRow.innerHTML = `
                         <td>${doc.id}</td>
-                        <td>${doc.originalFilename || 'document'}</td>
+                        <td>${doc.fileName || 'document'}</td>
                         <td>
                             <span class="badge doc-status-badge text-bg-warning">${doc.status || 'processing'}</span>
                         </td>
@@ -353,23 +355,93 @@
             modeBadge.textContent = 'SSE Stream Mode';
             modeBadge.className = 'badge bg-info text-white';
 
+            // 使用 POST + Authorization Header，避免把 prompt 放入 URL/访问日志。
             const token = localStorage.getItem('jwtToken');
-            const url = `/api/agent/chat/stream?message=${encodeURIComponent(message)}&conversationId=${encodeURIComponent(conversationId)}&token=${encodeURIComponent(token || '')}`;
-            currentEventSource = new EventSource(url);
-
-            currentEventSource.onmessage = function(event) {
-                statusSpan.innerHTML = '<i class="bi bi-broadcast"></i> 实时打字输出中...';
-                contentBox.textContent += event.data;
-            };
-
-            currentEventSource.onerror = function(err) {
-                statusSpan.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> 回答接收完毕 / 结束';
-                if (currentEventSource) {
-                    currentEventSource.close();
-                    currentEventSource = null;
+            fetch('/api/agent/chat/stream', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token
+                },
+                body: JSON.stringify({ message: message, conversationId: conversationId })
+            }).then(async response => {
+                if (response.status === 401 || response.status === 403) {
+                    localStorage.removeItem('jwtToken');
+                    window.location.reload();
+                    throw new Error('AUTH_REQUIRED');
                 }
+                if (!response.ok || !response.body) {
+                    throw new Error('STREAM_UNAVAILABLE');
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let terminalEventReceived = false;
+
+                function handleSseFrame(frame) {
+                    if (!frame.trim()) return;
+                    let eventName = 'message';
+                    const dataLines = [];
+                    for (const line of frame.split('\n')) {
+                        if (line.startsWith('event:')) {
+                            eventName = line.substring(6).trim();
+                        } else if (line.startsWith('data:')) {
+                            dataLines.push(line.substring(5).trimStart());
+                        }
+                    }
+                    if (dataLines.length === 0) return;
+                    if (terminalEventReceived) {
+                        throw new Error('SSE_EVENT_AFTER_TERMINAL');
+                    }
+
+                    let payload;
+                    try {
+                        payload = JSON.parse(dataLines.join('\n'));
+                    } catch (_) {
+                        throw new Error('INVALID_SSE_PAYLOAD');
+                    }
+
+                    if (eventName === 'token') {
+                        statusSpan.innerHTML = '<i class="bi bi-broadcast"></i> 实时打字输出中...';
+                        contentBox.textContent += payload.delta || '';
+                    } else if (eventName === 'complete') {
+                        terminalEventReceived = true;
+                        statusSpan.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> 回答接收完毕';
+                    } else if (eventName === 'error') {
+                        terminalEventReceived = true;
+                        statusSpan.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-danger"></i> 回答中断';
+                        const safeMessage = payload.message || '模型服务暂时不可用，请稍后重试。';
+                        contentBox.textContent += (contentBox.textContent ? '\n\n' : '') + safeMessage;
+                    }
+                }
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+                    buffer = buffer.replace(/\r\n/g, '\n');
+
+                    let boundary;
+                    while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+                        const frame = buffer.substring(0, boundary);
+                        buffer = buffer.substring(boundary + 2);
+                        handleSseFrame(frame);
+                    }
+
+                    if (done) {
+                        if (buffer.trim()) handleSseFrame(buffer);
+                        if (!terminalEventReceived) {
+                            throw new Error('STREAM_ENDED_WITHOUT_TERMINAL_EVENT');
+                        }
+                        scheduleUsageRefresh();
+                        break;
+                    }
+                }
+            }).catch(() => {
+                statusSpan.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-danger"></i> 连接错误';
+                contentBox.textContent = '请求暂时无法完成，请稍后重试。';
                 scheduleUsageRefresh();
-            };
+            });
         } else {
             modeBadge.textContent = 'Sync Mode';
             modeBadge.className = 'badge bg-primary';
@@ -390,14 +462,15 @@
                 }
                 return res.json();
             })
-            .then(data => {
+            .then(responseData => {
+                const data = responseData.data;
                 statusSpan.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> 回答成功';
                 contentBox.textContent = data.reply || '无返回结果';
                 scheduleUsageRefresh();
             })
-            .catch(err => {
+            .catch(() => {
                 statusSpan.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-danger"></i> 请求错误';
-                contentBox.textContent = '请求发生异常: ' + err;
+                contentBox.textContent = '请求暂时无法完成，请稍后重试。';
                 scheduleUsageRefresh();
             });
         }
@@ -427,7 +500,8 @@
                 }
                 return res.json();
             })
-            .then(data => {
+            .then(responseData => {
+                const data = responseData.data;
                 if (!data) return;
                 document.getElementById('obsTodayCalls').textContent = data.todayCalls || 0;
                 document.getElementById('obsTotalCalls').textContent = data.totalCalls || 0;
@@ -553,7 +627,8 @@
             }).then(res => {
                 if (!res.ok) throw new Error('登录失败');
                 return res.json();
-            }).then(data => {
+            }).then(responseData => {
+                const data = responseData.data;
                 localStorage.setItem('jwtToken', data.token);
                 localStorage.setItem('userRole', data.role);
                 window.location.reload();
@@ -574,7 +649,8 @@
             }).then(res => {
                 if (!res.ok) throw new Error('注册失败');
                 return res.json();
-            }).then(data => {
+            }).then(responseData => {
+                const data = responseData.data;
                 localStorage.setItem('jwtToken', data.token);
                 localStorage.setItem('userRole', data.role);
                 window.location.reload();

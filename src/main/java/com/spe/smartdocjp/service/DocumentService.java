@@ -1,11 +1,13 @@
 package com.spe.smartdocjp.service;
 
+import com.spe.smartdocjp.exception.DocumentNotFoundException;
 import com.spe.smartdocjp.model.DTO.DocumentDTO;
 import com.spe.smartdocjp.model.DTO.DocumentStatusDTO;
 import com.spe.smartdocjp.model.entity.Document;
 import com.spe.smartdocjp.model.entity.User;
 import com.spe.smartdocjp.repository.DocumentRepository;
 import com.spe.smartdocjp.repository.UserRepository;
+import com.spe.smartdocjp.security.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.FileSystemResource;
@@ -25,6 +27,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.UUID;
+import com.spe.smartdocjp.model.DTO.UpdateDocRequest;
 
 @Service
 @RequiredArgsConstructor
@@ -47,16 +50,16 @@ public class DocumentService {
      The transaction ensures rollback on failure. If the database save fails,
      the newly created file on disk is deleted.
      @param file The uploaded file (must not be null).
-     @param userId The ID of the uploading user.
      @return The saved document entity.
      @throws IOException If an I/O error occurs during file handling.
      @throws RuntimeException If the user is not found or file writing fails.
      */
     @Transactional // 报错后能回滚
-    public Document uploadDocument(MultipartFile file, Long userId) throws IOException {
+    public Document uploadDocument(MultipartFile file) throws IOException {
         if (file == null || file.isEmpty()) {
-            throw new RuntimeException("上传的文件不能为空 (File is empty)");
+            throw new IllegalArgumentException("上传的文件不能为空 (File is empty)");
         }
+        Long userId = SecurityUtils.requireCurrentUserId();
         // 先确保 存储目录存在
         Path fileStorageLocation = getFileStorageLocation();
         Files.createDirectories(fileStorageLocation);
@@ -131,9 +134,7 @@ public class DocumentService {
      * @return DTO containing status information, or null if not found.
      */
     public DocumentStatusDTO getDocumentStatus(Long documentId) {
-        return documentRepository.findById(documentId)
-                .map(DocumentStatusDTO::from)
-                .orElse(null);
+        return DocumentStatusDTO.from(requireAccessibleDocument(documentId));
     }
 
     /**
@@ -141,7 +142,11 @@ public class DocumentService {
      @return A sorted list of all documents.
      */
     public List<Document> getAllDocumentsForView() {
-        return documentRepository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"));
+        Long userId = SecurityUtils.requireCurrentUserId();
+        if (SecurityUtils.isCurrentUserAdmin()) {
+            return documentRepository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"));
+        }
+        return documentRepository.findByUserIdOrderByCreatedAtDesc(userId);
     }
 
     /**
@@ -149,7 +154,7 @@ public class DocumentService {
      @return A list of document DTOs.
      */
     public List<DocumentDTO> getAllDocumentForApi() {
-        return documentRepository.findAll()
+        return getAllDocumentsForView()
                 .stream()
                 .map(DocumentDTO::from)
                 .toList();
@@ -161,19 +166,58 @@ public class DocumentService {
      * @return A page of document DTOs
      */
     public Page<DocumentDTO> getAllDocuments(Pageable pageable) {
-        return documentRepository.findAll(pageable)
+        Long userId = SecurityUtils.requireCurrentUserId();
+        Page<Document> documents = SecurityUtils.isCurrentUserAdmin()
+                ? documentRepository.findAll(pageable)
+                : documentRepository.findByUserId(userId, pageable);
+        return documents
                 .map(DocumentDTO::from);
     }
 
-    public void deleteDocument(Long id) {
-        Document doc = documentRepository.findById(id).orElseThrow(() -> new RuntimeException("Document not found"));
-        Long currentUserId = com.spe.smartdocjp.security.SecurityUtils.getCurrentUserId();
-        String role = com.spe.smartdocjp.security.SecurityUtils.getCurrentUsername(); // Actually we need Role from authorities, but let's check userId for now.
-        // Or simply:
-        if (!doc.getUser().getId().equals(currentUserId) &&
-            !org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication().getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"))) {
-            throw new org.springframework.security.access.AccessDeniedException("您只能删除自己的文档");
+    public DocumentDTO getDocumentById(Long id) {
+        return DocumentDTO.from(requireAccessibleDocument(id));
+    }
+
+    @Transactional
+    public DocumentDTO updateDocumentMetadata(Long id, UpdateDocRequest request) {
+        Document doc = requireAccessibleDocument(id);
+
+        if (request.getTitle() != null && !request.getTitle().trim().isEmpty()) {
+            doc.setTitle(request.getTitle().trim());
         }
+
+        documentRepository.save(doc);
+        return DocumentDTO.from(doc);
+    }
+
+    @Transactional
+    public void reAnalyzeDocument(Long id) {
+        Document doc = requireAccessibleDocument(id);
+
+        Path targetLocation = getFileStorageLocation().resolve(doc.getStoragePath());
+
+        doc.setStatus(Document.DocStatus.processing);
+        doc.setEmbeddingStatus(Document.EmbeddingStatus.processing);
+        doc.setSummary("重新触发 AI 摘要与 RAG 向量化处理...");
+        documentRepository.save(doc);
+
+        // 异步触发
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            documentAsyncService.processAiAndRagAsync(doc.getId(), targetLocation);
+                        }
+                    }
+            );
+        } else {
+            documentAsyncService.processAiAndRagAsync(doc.getId(), targetLocation);
+        }
+    }
+
+    public void deleteDocument(Long id) {
+        requireAccessibleDocument(id);
         
         // 调用这行代码时，Hibernate 会自动把它转换成 UPDATE 语句
         documentRepository.deleteById(id);
@@ -186,12 +230,12 @@ public class DocumentService {
     }
 
     /**
-     Finds all documents uploaded by a specific user.
-     @param id The unique ID of the user.
-     @return A list of DTOs for the user's uploaded documents.
+     Finds all documents uploaded by the current user.
+     @return A list of DTOs for the current user's uploaded documents.
      */
-    public List<DocumentDTO> findUploadedDocumentsByUserId(Long id) {
-        return documentRepository.findUploadedDocumentsByUserId(id)
+    public List<DocumentDTO> findUploadedDocumentsForCurrentUser() {
+        Long userId = SecurityUtils.requireCurrentUserId();
+        return documentRepository.findUploadedDocumentsByUserId(userId)
                 .stream()
                 .map(DocumentDTO::from)
                 .toList();
@@ -202,10 +246,22 @@ public class DocumentService {
      @return A list of DTOs for deleted documents.
      */
     public List<DocumentDTO> findAllDeletedDocuments() {
-        return documentRepository.findAllDeletedDocuments()
+        Long userId = SecurityUtils.requireCurrentUserId();
+        List<Document> documents = SecurityUtils.isCurrentUserAdmin()
+                ? documentRepository.findAllDeletedDocuments()
+                : documentRepository.findDeletedDocumentsByUserId(userId);
+        return documents
                 .stream()
                 .map(DocumentDTO::from)
                 .toList();
+    }
+
+    private Document requireAccessibleDocument(Long documentId) {
+        Long userId = SecurityUtils.requireCurrentUserId();
+        return (SecurityUtils.isCurrentUserAdmin()
+                ? documentRepository.findById(documentId)
+                : documentRepository.findByIdAndUserId(documentId, userId))
+                .orElseThrow(DocumentNotFoundException::new);
     }
 
     private Path getFileStorageLocation() {

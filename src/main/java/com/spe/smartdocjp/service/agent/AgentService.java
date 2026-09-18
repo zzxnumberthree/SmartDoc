@@ -1,6 +1,7 @@
 package com.spe.smartdocjp.service.agent;
 
 import com.spe.smartdocjp.model.DTO.AgentDTOs.*;
+import com.spe.smartdocjp.security.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -8,10 +9,15 @@ import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
+import java.net.SocketTimeoutException;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 
 /**
@@ -39,30 +45,15 @@ public class AgentService {
             Pattern.DOTALL
     );
 
-    private volatile ChatClient chatClient;
-
     /**
-     * Lazily initializes and caches the ChatClient with DocumentAgentTools using a cloned builder
-     * to prevent polluting the shared prototype builder across requests and services.
+     * Creates a request-scoped ChatClient so server-controlled tool authorization context
+     * cannot be shared between users.
      */
-    private ChatClient getOrCreateChatClient() {
-        if (chatClient == null) {
-            synchronized (this) {
-                if (chatClient == null) {
-                    ChatClient.Builder builderToUse = null;
-                    try {
-                        builderToUse = chatClientBuilder.clone();
-                    } catch (Exception ignored) {}
-                    if (builderToUse == null) {
-                        builderToUse = chatClientBuilder;
-                    }
-                    chatClient = builderToUse
-                            .defaultTools(documentAgentTools)
-                            .build();
-                }
-            }
-        }
-        return chatClient;
+    private ChatClient createChatClient(Long userId) {
+        return chatClientBuilder.clone()
+                .defaultTools(documentAgentTools)
+                .defaultToolContext(Map.of(DocumentAgentTools.USER_ID_CONTEXT_KEY, userId))
+                .build();
     }
 
     /**
@@ -73,24 +64,28 @@ public class AgentService {
     public AgentChatResponse chat(AgentChatRequest request) {
         String conversationId = request.getEffectiveConversationId();
         String rawMessage = request.message();
-        log.info("Processing Agent chat for conversationId '{}': '{}'", conversationId, rawMessage);
+        log.info("Processing Agent chat for conversationId '{}' (inputLength={})",
+                conversationId, rawMessage != null ? rawMessage.length() : 0);
 
         // 1. Guardrail Input Validation
         validateInputGuardrail(rawMessage);
 
         try {
+            Long userId = SecurityUtils.requireCurrentUserId();
+            String memoryConversationId = scopedConversationId(userId, conversationId);
+
             // 2. Load and render System Prompt
             String systemTemplate = new String(systemPromptResource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             String renderedSystemPrompt = systemTemplate.replace("{conversationId}", conversationId);
 
-            // 3. Invoke cached and isolated ChatClient
-            ChatClient client = getOrCreateChatClient();
+            // 3. Invoke a user-scoped ChatClient and isolate chat memory by user ID
+            ChatClient client = createChatClient(userId);
 
             String aiOutput = client.prompt()
                     .system(renderedSystemPrompt)
                     .user(rawMessage)
                     .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
-                    .advisors(a -> a.param("chat_memory_conversation_id", conversationId)
+                    .advisors(a -> a.param("chat_memory_conversation_id", memoryConversationId)
                                     .param("chat_memory_response_size", 30))
                     .call()
                     .content();
@@ -101,56 +96,104 @@ public class AgentService {
             log.info("Agent chat completed for conversationId '{}'. Output length: {}", conversationId, sanitizedOutput != null ? sanitizedOutput.length() : 0);
             return AgentChatResponse.of(conversationId, sanitizedOutput);
 
+        } catch (AccessDeniedException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Error executing Agent chat pipeline for conversationId: " + conversationId, e);
-            throw new RuntimeException("AI Agent 处理异常: " + e.getMessage(), e);
+            throw new RuntimeException("AI Agent 服务暂时不可用，请稍后重试。", e);
         }
     }
 
     /**
      * Processes a user chat request through the AI Agent returning a reactive stream of response chunks (SSE).
      * @param request The chat request with message and conversationId.
-     * @return Flux of String response tokens.
+     * @return Typed token, completion, or terminal error events.
      */
-    public Flux<String> chatStream(AgentChatRequest request) {
+    public Flux<AgentStreamEvent> chatStream(AgentChatRequest request) {
         String conversationId = request.getEffectiveConversationId();
         String rawMessage = request.message();
-        log.info("Processing Agent SSE stream chat for conversationId '{}': '{}'", conversationId, rawMessage);
+        log.info("Processing Agent SSE stream chat for conversationId '{}' (inputLength={})",
+                conversationId, rawMessage != null ? rawMessage.length() : 0);
 
         try {
-            // 1. Guardrail Input Validation
             validateInputGuardrail(rawMessage);
+        } catch (IllegalArgumentException e) {
+            log.warn("Guardrail intercepted SSE chat request for conversationId '{}': {}", conversationId, e.getMessage());
+            return Flux.just(AgentStreamEvent.error(
+                    conversationId,
+                    AgentStreamErrorCode.INPUT_REJECTED,
+                    "输入内容未通过安全检查，请修改后重试。",
+                    false,
+                    null));
+        }
+
+        try {
+            Long userId = SecurityUtils.requireCurrentUserId();
+            String memoryConversationId = scopedConversationId(userId, conversationId);
 
             // 2. Load and render System Prompt
             String systemTemplate = new String(systemPromptResource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             String renderedSystemPrompt = systemTemplate.replace("{conversationId}", conversationId);
 
-            // 3. Invoke cached and isolated ChatClient with stream().content()
-            ChatClient client = getOrCreateChatClient();
+            // 3. Invoke a user-scoped ChatClient with stream().content()
+            ChatClient client = createChatClient(userId);
 
-            return client.prompt()
+            Flux<AgentStreamEvent> tokenEvents = client.prompt()
                     .system(renderedSystemPrompt)
                     .user(rawMessage)
                     .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
-                    .advisors(a -> a.param("chat_memory_conversation_id", conversationId)
+                    .advisors(a -> a.param("chat_memory_conversation_id", memoryConversationId)
                                     .param("chat_memory_response_size", 30))
                     .stream()
                     .content()
                     .map(this::validateOutputGuardrail)
-                    .onErrorResume(e -> {
-                        log.error("Error during Agent SSE streaming for conversationId: " + conversationId, e);
-                        if (e instanceof IllegalArgumentException) {
-                            return Flux.just("\n[［安全护栏拦截］: " + e.getMessage() + "]");
-                        }
-                        return Flux.just("\n[［AI服务连接提示］: 当前网络或大模型调用发生超时异常 (" + e.getMessage() + ")，请检查网络/API配置或稍后重试]");
-                    });
-        } catch (IllegalArgumentException e) {
-            log.warn("Guardrail intercepted SSE chat request for conversationId '{}': {}", conversationId, e.getMessage());
-            return Flux.just("[［安全护栏拦截］: " + e.getMessage() + "]");
+                    .map(delta -> AgentStreamEvent.token(conversationId, delta));
+
+            return tokenEvents
+                    .concatWithValues(AgentStreamEvent.complete(conversationId))
+                    .onErrorResume(e -> Flux.just(toSafeStreamError(conversationId, e)));
+        } catch (AccessDeniedException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Error initiating Agent SSE streaming for conversationId: " + conversationId, e);
-            return Flux.just("[［AI服务连接提示］: " + e.getMessage() + "]");
+            return Flux.just(toSafeStreamError(conversationId, e));
         }
+    }
+
+    private AgentStreamEvent toSafeStreamError(String conversationId, Throwable error) {
+        String errorId = java.util.UUID.randomUUID().toString();
+        log.error("Agent SSE stream failed (conversationId={}, errorId={})", conversationId, errorId, error);
+        if (hasCause(error, TimeoutException.class)
+                || hasCause(error, SocketTimeoutException.class)
+                || hasCause(error, HttpTimeoutException.class)) {
+            return AgentStreamEvent.error(
+                    conversationId,
+                    AgentStreamErrorCode.MODEL_TIMEOUT,
+                    "模型服务响应超时，请稍后重试。",
+                    true,
+                    errorId);
+        }
+        return AgentStreamEvent.error(
+                conversationId,
+                AgentStreamErrorCode.MODEL_UNAVAILABLE,
+                "模型服务暂时不可用，请稍后重试。",
+                true,
+                errorId);
+    }
+
+    private boolean hasCause(Throwable error, Class<? extends Throwable> type) {
+        Throwable current = error;
+        while (current != null) {
+            if (type.isInstance(current)) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    static String scopedConversationId(Long userId, String conversationId) {
+        return userId + ":" + conversationId;
     }
 
     /**
@@ -165,7 +208,7 @@ public class AgentService {
             throw new IllegalArgumentException("输入字数超过上限 (2000字)，已被安全策略拦截。");
         }
         if (DANGEROUS_INPUT_PATTERN.matcher(message).matches()) {
-            log.warn("Guardrail intercepted dangerous input attempt: {}", message);
+            log.warn("Guardrail intercepted dangerous input attempt (inputLength={})", message.length());
             throw new IllegalArgumentException("［安全护栏拦截］检测到潜在的不安全指令或高危系统操作词汇（例如删除表、执行脚本）。Agent 助手仅支持只读探查，请修改您的询问后重试。");
         }
     }
@@ -184,7 +227,8 @@ public class AgentService {
             String cleaned = output
                     .replaceAll("(?i)GOOGLE_API_KEY=[^\\s]+", "GOOGLE_API_KEY=***")
                     .replaceAll("(?i)jdbc:mysql:[^\\s]+", "jdbc:mysql://***")
-                    .replaceAll("(?i)C:\\\\Users\\\\[^\\s\\\\]+", "C:\\\\Users\\\\***");
+                    .replaceAll("(?i)C:\\\\Users\\\\[^\\s\\\\]+", "C:\\\\Users\\\\***")
+                    .replaceAll("(?i)NullPointerException|StackOverflowError", "internal-error");
             return "［安全护栏提醒］检测到模型输出中包含内部配置或系统路径调试信息，已进行自动安全脱敏处理。回答如下：\n\n" + cleaned;
         }
         return output;

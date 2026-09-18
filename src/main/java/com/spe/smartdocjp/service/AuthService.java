@@ -31,13 +31,12 @@ public class AuthService {
             throw new IllegalArgumentException("Username already exists");
         }
 
-        User.Role role = request.getUsername().toLowerCase().startsWith("admin") ? User.Role.ADMIN : User.Role.USER;
-
+        // 安全策略：注册接口强制分配 USER 角色，管理员权限只能通过后台手动分配
         User user = User.builder()
                 .username(request.getUsername())
                 .password(passwordEncoder.encode(request.getPassword()))
                 .email(request.getEmail() != null ? request.getEmail() : request.getUsername() + "@example.com")
-                .role(role)
+                .role(User.Role.USER)
                 .isDeleted(false)
                 .build();
 

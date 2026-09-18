@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -12,7 +13,7 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.net.URI;
 import java.time.Instant;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 
@@ -99,16 +100,39 @@ public class GlobalExceptionHandler {
         return problemDetail;
     }
 
+    @ExceptionHandler(DocumentNotFoundException.class)
+    public ProblemDetail handleDocumentNotFound(DocumentNotFoundException exc) {
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.NOT_FOUND,
+                "文档未找到"
+        );
+        problemDetail.setTitle("Document Not Found");
+        problemDetail.setProperty("timestamp", Instant.now());
+        return problemDetail;
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ProblemDetail handleAccessDenied(AccessDeniedException exc) {
+        log.warn("Access denied: {}", exc.getMessage());
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.FORBIDDEN,
+                "无权访问该资源"
+        );
+        problemDetail.setTitle("Forbidden");
+        problemDetail.setProperty("timestamp", Instant.now());
+        return problemDetail;
+    }
+
     // 处理其他所有未预期的异常, 响应状态：500 Internal Server Error 防止原始堆栈信息泄露给前端，提高安全性。
     @ExceptionHandler(Exception.class)
     public ProblemDetail handleGeneralException(Exception exc) {
         log.error("Unhandled exception intercepted by GlobalExceptionHandler: ", exc);
         ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(
                 HttpStatus.INTERNAL_SERVER_ERROR,
-                "服务器内部发生意外错误，请联系管理员。" + (exc.getMessage() != null ? " (" + exc.getMessage() + ")" : "")
+                "服务器内部发生意外错误，请联系管理员。"
         );
         problemDetail.setTitle("Internal Server Error");
-        problemDetail.setType(URI.create("zzxnumberthree@gmail.com"));
+        problemDetail.setType(URI.create("https://api.spe.smartdoc.com/errors/internal-server-error"));
         problemDetail.setProperty("timestamp", Instant.now());
 
         return problemDetail;
@@ -117,18 +141,30 @@ public class GlobalExceptionHandler {
     /**
      Handles validation errors from @Valid annotated parameters.
      @param ex The MethodArgumentNotValidException.
-     @return A ResponseEntity with HTTP 400 and a map of field errors.
+     @return A ProblemDetail with HTTP 400 and structured field errors.
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<Map<String, String>> handleValidationExceptions(MethodArgumentNotValidException ex) {
+    public ProblemDetail handleValidationExceptions(MethodArgumentNotValidException ex) {
+        log.warn("Validation failed: {} field error(s)", ex.getBindingResult().getFieldErrorCount());
 
-        Map<String, String> errors = new HashMap<>();
-        ex.getBindingResult().getFieldErrors().forEach(error -> {
-            errors.put(error.getField(), error.getDefaultMessage());
-        });
+        Map<String, String> fieldErrors = new LinkedHashMap<>();
+        for (FieldError error : ex.getBindingResult().getFieldErrors()) {
+            fieldErrors.putIfAbsent(
+                    error.getField(),
+                    error.getDefaultMessage() != null ? error.getDefaultMessage() : "Validation error"
+            );
+        }
 
-        // 返回 400 Bad Request
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errors);
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.BAD_REQUEST,
+                "请求参数验证失败"
+        );
+        problemDetail.setTitle("Validation Failed");
+        problemDetail.setType(URI.create("https://api.spe.smartdoc.com/errors/validation-failed"));
+        problemDetail.setProperty("timestamp", Instant.now());
+        problemDetail.setProperty("fieldErrors", fieldErrors);
+
+        return problemDetail;
     }
 
 

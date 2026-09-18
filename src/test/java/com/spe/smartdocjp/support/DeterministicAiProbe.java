@@ -11,6 +11,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class DeterministicAiProbe {
 
+    public static final String PROVIDER_FAILURE_SENTINEL =
+            "AIza-SENTINEL jdbc:mysql://db:3306/smartdoc C:\\private\\uploads\\secret.pdf";
+
     private volatile CountDownLatch summaryStarted = new CountDownLatch(1);
     private volatile CountDownLatch summaryRelease = new CountDownLatch(0);
     private final AtomicBoolean failPdfSummary = new AtomicBoolean(false);
@@ -40,7 +43,7 @@ public final class DeterministicAiProbe {
         summaryStarted.countDown();
 
         if (failPdfSummary.get()) {
-            throw new IllegalStateException("deterministic provider failure");
+            throw new IllegalStateException(PROVIDER_FAILURE_SENTINEL);
         }
 
         try {

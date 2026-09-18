@@ -58,13 +58,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     }
 
     private String getJwtFromRequest(HttpServletRequest request) {
+        // 安全策略：仅允许通过 Authorization Header 传递 JWT，禁止 URL 参数传递以防止 Token 泄漏到日志和浏览器历史
         String bearerToken = request.getHeader("Authorization");
         if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
             return bearerToken.substring(7);
-        }
-        String queryToken = request.getParameter("token");
-        if (StringUtils.hasText(queryToken)) {
-            return queryToken;
         }
         return null;
     }

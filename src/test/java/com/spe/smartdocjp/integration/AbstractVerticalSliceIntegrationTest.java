@@ -2,12 +2,14 @@ package com.spe.smartdocjp.integration;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.spe.smartdocjp.model.DTO.AgentDTOs.AgentToolResult;
 import com.spe.smartdocjp.model.entity.Document;
 import com.spe.smartdocjp.model.entity.User;
 import com.spe.smartdocjp.repository.DocumentChunkRepository;
 import com.spe.smartdocjp.repository.DocumentRepository;
 import com.spe.smartdocjp.repository.UserRepository;
 import com.spe.smartdocjp.security.CustomUserDetails;
+import com.spe.smartdocjp.service.agent.DocumentAgentTools;
 import com.spe.smartdocjp.support.DeterministicAiProbe;
 import com.spe.smartdocjp.support.DeterministicAiTestConfiguration;
 import com.spe.smartdocjp.support.ResettableVectorStore;
@@ -21,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -34,6 +37,8 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import java.io.ByteArrayOutputStream;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -82,6 +87,9 @@ abstract class AbstractVerticalSliceIntegrationTest {
 
     @Autowired
     private ResettableVectorStore vectorStore;
+
+    @Autowired
+    private DocumentAgentTools documentAgentTools;
 
     @BeforeEach
     void resetProbe() {
@@ -177,8 +185,11 @@ abstract class AbstractVerticalSliceIntegrationTest {
         assertTrue(streamBody.contains("STREAM_ONE"));
         assertTrue(streamBody.contains("STREAM_TWO"));
         assertTrue(streamBody.contains("STREAM_COMPLETE"));
-        assertTrue(countOccurrences(streamBody, "data:") >= 3,
-                "Successful SSE should contain multiple data frames");
+        assertTrue(streamBody.contains("event:token"));
+        assertTrue(streamBody.contains("event:complete"));
+        assertFalse(streamBody.contains("event:error"));
+        assertTrue(countOccurrences(streamBody, "data:") >= 4,
+                "Successful SSE should contain token frames and one completion frame");
         assertTrue(streamBody.indexOf("STREAM_ONE") < streamBody.indexOf("STREAM_COMPLETE"));
     }
 
@@ -195,13 +206,155 @@ abstract class AbstractVerticalSliceIntegrationTest {
             Document document = documentRepository.findById(documentId).orElseThrow();
             assertEquals(Document.DocStatus.failed, document.getStatus(),
                     "Provider failure must not become a false COMPLETED summary state");
-            assertTrue(document.getSummary().startsWith("AI 服务暂时不可用"));
+            assertEquals("AI 服务暂时不可用，请稍后重试。", document.getSummary());
+            assertFalse(document.getSummary().contains(DeterministicAiProbe.PROVIDER_FAILURE_SENTINEL));
             assertEquals(Document.EmbeddingStatus.completed, document.getEmbeddingStatus(),
                     "PDF ingestion remains deterministic even when summary generation fails");
             assertTrue(document.getChunkCount() > 0);
             assertTrue(aiProbe.pdfSummaryCalls() >= 2,
                     "The call must pass through the Spring Retry proxy before recovery");
         });
+
+        String statusBody = mockMvc.perform(get("/api/documents/{id}/status", documentId)
+                        .with(authentication(user)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("failed"))
+                .andExpect(jsonPath("$.data.embeddingStatus").value("completed"))
+                .andExpect(jsonPath("$.data.summary").value("AI 服务暂时不可用，请稍后重试。"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertFalse(statusBody.contains("AIza-SENTINEL"));
+        assertFalse(statusBody.contains("jdbc:mysql"));
+        assertFalse(statusBody.contains("C:\\private"));
+    }
+
+    @Test
+    void embeddingFailureCannotReportFullPipelineSuccess() throws Exception {
+        Authentication user = createAuthentication("vertical-embedding-failure");
+        vectorStore.failAdds();
+
+        MvcResult uploadResult = uploadPdf("embedding-failure.pdf", user);
+        JsonNode uploadJson = objectMapper.readTree(uploadResult.getResponse().getContentAsString());
+        long documentId = uploadJson.path("data").path("id").asLong();
+
+        Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Document document = documentRepository.findById(documentId).orElseThrow();
+            assertEquals(Document.DocStatus.failed, document.getStatus(),
+                    "Indexing failure must fail the overall document lifecycle");
+            assertEquals(Document.EmbeddingStatus.failed, document.getEmbeddingStatus());
+            assertEquals(DeterministicAiTestConfiguration.SUMMARY, document.getSummary(),
+                    "A successful summary must not be replaced with provider error details");
+            assertEquals(0, document.getChunkCount());
+            assertTrue(documentChunkRepository.findByDocumentIdOrderByChunkIndexAsc(documentId).isEmpty(),
+                    "A vector-store failure before chunk persistence must not leave database chunks");
+        });
+    }
+
+    @Test
+    void authenticatedUserCannotRetrieveAnotherUsersRagOrToolData() throws Exception {
+        Authentication authenticationA = createAuthentication("tenant-a");
+        Authentication authenticationB = createAuthentication("tenant-b");
+        User ownerA = ((CustomUserDetails) authenticationA.getPrincipal()).getUser();
+        User ownerB = ((CustomUserDetails) authenticationB.getPrincipal()).getUser();
+
+        Document documentA = saveCompletedDocument(ownerA, "USER_A_DOC", "USER_A_SECRET");
+        Document documentB = saveCompletedDocument(ownerB, "USER_B_DOC", "USER_B_SECRET");
+
+        vectorStore.add(List.of(
+                vectorChunk("tenant-b-chunk", documentB, "USER_B_SECRET"),
+                vectorChunk("tenant-a-chunk", documentA, "USER_A_SECRET")
+        ));
+
+        String searchBody = mockMvc.perform(post("/api/search/query")
+                        .with(authentication(authenticationA))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"query":"secret","topK":1,"similarityThreshold":0.0}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].documentId").value(documentA.getId()))
+                .andExpect(jsonPath("$.data[0].documentTitle").value("USER_A_DOC"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertTrue(searchBody.contains("USER_A_SECRET"));
+        assertFalse(searchBody.contains("USER_B_SECRET"));
+        assertFalse(searchBody.contains("USER_B_DOC"));
+
+        String askBody = mockMvc.perform(post("/api/search/ask")
+                        .with(authentication(authenticationA))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"question":"What is the secret?","topK":1}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.sources.length()").value(1))
+                .andExpect(jsonPath("$.data.sources[0].documentId").value(documentA.getId()))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertFalse(askBody.contains("USER_B_SECRET"));
+        assertFalse(askBody.contains("USER_B_DOC"));
+
+        ToolContext userAToolContext = new ToolContext(Map.of(
+                DocumentAgentTools.USER_ID_CONTEXT_KEY,
+                ownerA.getId()
+        ));
+
+        AgentToolResult<String> toolSearch = documentAgentTools.searchDocuments("secret", userAToolContext);
+        assertTrue(toolSearch.data().contains("USER_A_SECRET"));
+        assertFalse(toolSearch.data().contains("USER_B_SECRET"));
+
+        AgentToolResult<String> foreignDocument = documentAgentTools.getDocumentById(documentB.getId(), userAToolContext);
+        assertFalse(foreignDocument.success());
+        assertFalse(foreignDocument.toString().contains("USER_B_DOC"));
+        assertFalse(foreignDocument.toString().contains("USER_B_SECRET"));
+
+        AgentToolResult<String> recentDocuments = documentAgentTools.listRecentDocuments(10, userAToolContext);
+        assertTrue(recentDocuments.data().contains("USER_A_DOC"));
+        assertFalse(recentDocuments.data().contains("USER_B_DOC"));
+
+        AgentToolResult<String> stats = documentAgentTools.getDocumentStats(userAToolContext);
+        assertTrue(stats.data().contains("有效文档总数：1"));
+
+        AgentToolResult<String> comparison = documentAgentTools.compareDocuments(
+                documentA.getId(), documentB.getId(), userAToolContext);
+        assertFalse(comparison.success());
+        assertFalse(comparison.toString().contains("USER_B_DOC"));
+        assertFalse(comparison.toString().contains("USER_B_SECRET"));
+    }
+
+    private Document saveCompletedDocument(User owner, String title, String summary) {
+        return documentRepository.saveAndFlush(Document.builder()
+                .title(title)
+                .originalFilename(title + ".txt")
+                .storagePath("test-only/" + title + ".txt")
+                .summary(summary)
+                .user(owner)
+                .status(Document.DocStatus.completed)
+                .embeddingStatus(Document.EmbeddingStatus.completed)
+                .chunkCount(1)
+                .isDeleted(false)
+                .build());
+    }
+
+    private org.springframework.ai.document.Document vectorChunk(
+            String vectorId, Document source, String content) {
+        return new org.springframework.ai.document.Document(
+                vectorId,
+                content,
+                Map.of(
+                        "documentId", source.getId(),
+                        "documentTitle", source.getTitle(),
+                        "chunkIndex", 0,
+                        "userId", source.getUser().getId()
+                )
+        );
     }
 
     private MvcResult uploadPdf(String filename, Authentication user) throws Exception {

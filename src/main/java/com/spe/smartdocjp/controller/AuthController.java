@@ -22,7 +22,7 @@ public class AuthController {
 
     private final AuthService authService;
 
-    @Operation(summary = "用户注册", description = "注册新用户，如果用户名以 'admin' 开头，将自动赋予 ADMIN 权限")
+    @Operation(summary = "用户注册", description = "注册新用户并分配标准 USER 角色")
     @PostMapping("/register")
     public ResponseEntity<ApiResponse<AuthResponse>> register(@Valid @RequestBody AuthRequest request) {
         return ResponseEntity.ok(ApiResponse.success(authService.register(request), "注册成功"));

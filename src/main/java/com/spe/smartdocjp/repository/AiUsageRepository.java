@@ -30,4 +30,8 @@ public interface AiUsageRepository extends JpaRepository<AiUsageRecord, Long> {
     long countByIsDeletedFalse();
 
     long countByCreatedAtAfterAndIsDeletedFalse(LocalDateTime time);
+
+    // JPQL 聚合查询：按操作类型分组统计调用次数，避免 findAll() 全表扫描导致 OOM
+    @Query("SELECT r.operationType, COUNT(r) FROM AiUsageRecord r WHERE r.isDeleted = false GROUP BY r.operationType")
+    List<Object[]> countByOperationType();
 }

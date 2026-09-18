@@ -20,6 +20,41 @@ import java.nio.file.Path;
 @Slf4j
 public class AiAnalysisService {
 
+    static final String SUMMARY_UNAVAILABLE_MESSAGE = "AI 服务暂时不可用，请稍后重试。";
+
+    public static final class SummaryResult {
+        private final boolean successful;
+        private final String content;
+
+        private SummaryResult(boolean successful, String content) {
+            this.successful = successful;
+            this.content = content;
+        }
+
+        public static SummaryResult success(String content) {
+            if (content == null || content.isBlank()) {
+                return unavailable();
+            }
+            return new SummaryResult(true, content);
+        }
+
+        public static SummaryResult unavailable() {
+            return new SummaryResult(false, SUMMARY_UNAVAILABLE_MESSAGE);
+        }
+
+        public static SummaryResult unsupportedFormat() {
+            return new SummaryResult(false, "不支持的文档格式。");
+        }
+
+        public boolean successful() {
+            return successful;
+        }
+
+        public String content() {
+            return content;
+        }
+    }
+
     private final ChatClient chatClient;
 
     /**
@@ -43,34 +78,35 @@ public class AiAnalysisService {
 
     // test
     public String testConnect() {
-        System.out.println("hello, this is testConnect()");
+        log.info("Executing testConnect() - verifying AI service connectivity");
         return chatClient.prompt("hello,who are you?").call().content();
     }
 
     /**
-     * Analyzes document content with retry mechanism (max 3 attempts, exponential backoff).
+     * Analyzes document content with retry mechanism (max 2 attempts, exponential backoff).
      * @param targetLocation Path to the stored document file on disk.
      * @param originalFilename The original name of the uploaded document.
-     * @return AI generated summary.
+     * @return A typed result containing either the generated summary or a safe fallback.
      * @throws Exception if all retry attempts fail and recover method is not triggered.
      */
     @Retryable(retryFor = {Exception.class}, maxAttempts = 2, backoff = @Backoff(delay = 1000, multiplier = 1.5))
-    public String analyzeDocumentWithRetry(com.spe.smartdocjp.service.parser.DocumentParser parser, Path targetLocation, String originalFilename) throws Exception {
+    public SummaryResult analyzeDocumentWithRetry(com.spe.smartdocjp.service.parser.DocumentParser parser, Path targetLocation, String originalFilename) throws Exception {
         log.info("Executing AI analysis with retry for file: {}", originalFilename);
-        return parser.parseAndAnalyze(targetLocation);
+        return SummaryResult.success(parser.parseAndAnalyze(targetLocation));
     }
 
     /**
-     * Recovery method called when analyzeDocumentWithRetry exhausts all 3 retry attempts.
+     * Recovery method called when analyzeDocumentWithRetry exhausts both retry attempts.
      * @param e The final exception thrown after retries.
      * @param targetLocation Path to the document.
      * @param originalFilename Original filename.
-     * @return Fallback graceful message.
+     * @return A failed result with a fixed safe fallback message.
      */
     @Recover
-    public String recoverAnalyzeDocument(Exception e, com.spe.smartdocjp.service.parser.DocumentParser parser, Path targetLocation, String originalFilename) {
-        log.error("AI analysis exhausted all retries for file '{}', triggering graceful fallback. Reason: {}", originalFilename, e.getMessage());
-        return "AI 服务暂时不可用，请稍后重试 (重试次数耗尽降级: " + e.getMessage() + ")";
+    public SummaryResult recoverAnalyzeDocument(Exception e, com.spe.smartdocjp.service.parser.DocumentParser parser, Path targetLocation, String originalFilename) {
+        log.error("AI analysis exhausted all retries for file '{}'; returning a safe fallback",
+                originalFilename, e);
+        return SummaryResult.unavailable();
     }
 
     /**

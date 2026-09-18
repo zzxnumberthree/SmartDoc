@@ -1,8 +1,8 @@
-# AI Smart Document Management System (AI-SDMS)
+# SmartDoc-JP — Spring AI / Gemini Document Assistant
 
 ##  概要 (Project Overview)
 **「ドキュメント管理を、もっとスマートに。」**
-Spring Boot 3とGoogle Gemini APIを活用し、 単なるファイルの保存・削除にとどまらず、アップロードされた技術文書の内容を AI が自動的に解析し、要約を生成することで、情報の検索性と管理効率を劇的に向上させます。 「2025年の崖」と呼ばれるDX（デジタルトランスフォーメーション）の課題解決を意識して開発しました。
+Java 21、Spring Boot 3.4.1、Spring AI と Google Gemini の連携により、アップロードされた文書の自動要約、ユーザー単位のローカル RAG 検索、出典付き Q&A、SSE 応答、および読み取り専用の文書 Tool Calling を提供する個人開発プロジェクトです。
 
 
 日本のIT現場における「ドキュメント整理の繁雑さ」という課題を解決するために開発しました。
@@ -18,17 +18,29 @@ Spring Boot 3とGoogle Gemini APIを活用し、 単なるファイルの保存�
 
 - 対応フォーマット: .txt, .pdf, .md ...
 
-- 特長: Spring AI を活用した堅牢なプロンプトエンジニアリングと Gemini 2.5-flash による高速な推論。
+- PDF は `application/pdf` media として Gemini に渡し、テキスト系ファイルとともに要約処理を行います。実 Gemini による OCR、図表理解、品質、速度は現在のテストでは評価していません。
 
-### 2. 安全で堅牢なデータ操作 (Robust CRUD & Logical Deletion)
+### 2. ローカル RAG と出典付き Q&A
+
+- 文書を分割して Spring AI `SimpleVectorStore` に保存し、認証ユーザーの所有範囲で検索します。
+- Q&A 応答には検索元文書の情報を付与します。
+- 現在のファイルベース vector store はローカルデモ向けであり、分散構成や本番規模を示すものではありません。
+
+### 3. Agent Tool Calling と SSE
+
+- 文書検索、詳細取得、最近の文書、統計、比較の 5 つの読み取り専用 `@Tool` を登録しています。
+- Tool のユーザー範囲はサーバー側コンテキストから決定し、失敗は構造化され、内部情報を含まない結果として返します。
+- Web 応答は名前付き `token`、`complete`、`error` SSE event を使用します。再接続、heartbeat、負荷時の信頼性は未検証です。
+
+### 4. データ操作と論理削除 (CRUD & Logical Deletion)
 - ドキュメントの参照、更新、削除の基本機能。
 
-- 論理削除 (Logical Deletion): データの安全性と監査（監査証跡）を考慮し、データベースからの物理削除ではなく論理削除を実装。
+- 論理削除 (Logical Deletion): データベースから即時に物理削除せず、削除状態を保持します。独立した監査証跡システムを実装しているという意味ではありません。
 
-- 一貫したエラーハンドリング: 独自の GlobalExceptionHandler により、予期せぬエラーやバリデーション違反も適切な形式で返却します。
+- HTTP コントローラーの主要な例外は `GlobalExceptionHandler` で処理し、リクエスト検証失敗時は構造化された RFC 7807 Problem Details を返します。バックグラウンド処理はライフサイクル状態として成功・失敗を記録します。例外処理全体が完全に脱機密化されているという意味ではありません。
 
 ##  技術スタック (Tech Stack)
-最新のLTSバージョンを採用し、保守性とパフォーマンスを意識した選定を行いました。
+現在のビルドとコンテナ設定は Java 21 を使用します。
 
 - **Language**: Java 21
 - **Framework**: Spring Boot 3.4.1
@@ -40,23 +52,24 @@ Spring Boot 3とGoogle Gemini APIを活用し、 単なるファイルの保存�
 ---
 
 ##  アーキテクチャ (Architecture)
-保守性を高めるため、責任の分離（Separation of Concerns）を意識したレイヤードアーキテクチャを採用しています。
+文書管理、非同期解析、RAG、Agent をサービス境界で分離しています。
 
 ```mermaid
-graph TD
-    Client[Client / API Tester] -->|HTTP Request| Controller
-    subgraph "Application Layer"
-        Controller -->|DTO| Service
-        Service -->|Validation/Logic| Repository
-        Service -->|Prompt Engineering| GeminiService[Gemini AI Service]
-    end
-    subgraph "Infrastructure"
-        Repository -->|JPA| Database[(Database)]
-        GeminiService -->|REST| GoogleAI[Google Gemini API]
-    end
-    %% AOP Logic Visualization
-    AOP[AOP Logging & Exception Handler] -.->|Cross-Cutting| Controller
-    AOP -.->|Cross-Cutting| Service
+flowchart LR
+    Client[Web / API client] --> Controllers[Document / Search / Agent controllers]
+    Controllers --> DocumentService[Document service]
+    Controllers --> RagService[RAG service]
+    Controllers --> AgentService[Agent service]
+    DocumentService --> AsyncService[After-commit async processing]
+    AsyncService --> Parsers[Text / PDF parsers]
+    Parsers --> Gemini[Spring AI / Gemini]
+    AsyncService --> RagService
+    RagService --> VectorStore[Local SimpleVectorStore]
+    RagService --> Database[(JPA document/chunk data)]
+    AgentService --> Gemini
+    AgentService --> Tools[Five read-only document tools]
+    Tools --> RagService
+    Tools --> Database
 ```
 
 ---
@@ -66,13 +79,13 @@ graph TD
 ### 1. 運用を意識したログ設計 (AOP Implementation)
 開発当初、ログ出力が散在しデバッグが困難でした。これを解決するために **Spring AOP (Aspect Oriented Programming)** を導入しました。
 
-* コントローラー層やサービス層のメソッド実行前後で、自動的にリクエスト情報や処理時間をログ出力する仕組みを構築。
-* これにより、ビジネスロジックを汚すことなく、**トレーサビリティ（追跡可能性）**を大幅に向上させました。
+* サービス層のメソッド実行について、クラス名、メソッド名、処理時間を横断的に記録する仕組みを構築。
+* ビジネスロジックから横断的なログと処理時間計測を分離しています。ログやメトリクスが本番可観測性を保証するという意味ではありません。
 
 ### 2. 外部API連携と依存関係の管理 (API Integration & Dependency Management)
 **Gemini API** の統合において、レスポンスの遅延や形式の不一致に直面しました。
 
-* 60 秒の HTTP タイムアウト、再試行、フォールバック状態を実装しました。実 Gemini の可用性・レイテンシ・品質は環境依存であり、別途 live smoke が必要です。
+* 60 秒の HTTP タイムアウト、再試行、失敗時の状態遷移を実装しました。新規処理の summary fallback と非同期処理失敗は固定の安全な文言を保存し、例外詳細はクライアントへ返しません。旧バージョンが保存した既存行には別途クリーンアップ方針が必要です。実 Gemini の可用性・レイテンシ・品質は環境依存であり、別途 live smoke が必要です。
 * また、**Java 21** と **Spring Boot 3.4.1** の組み合わせにおける依存関係（Dependencies）の競合を解消し、モダンな開発環境を整えました。
 
 ### 3. 設計思想へのこだわり (Architectural Design)
@@ -84,7 +97,7 @@ graph TD
 
 Dockerfile と Docker Compose 設定を提供しています。Docker/Linux での実行証跡は環境ごとに確認が必要です。
 
-リポジトリをクローン: 
+リポジトリをクローン:
 
       git clone https://github.com/zzxnumberthree/SmartDoc.git
 
@@ -114,7 +127,7 @@ Linux で実 API を含む Compose smoke を実行する場合は、`.env` の�
 
 旧 Compose 設定で作成済みの `db_data` volume には、過去の `data.sql` による `admin_user_1` が残っている可能性があります。アップグレード時は当該ユーザーを監査し、必要に応じてパスワード変更または削除を行ってください。新設定は seed data を実行しませんが、既存データを自動削除もしません。
 
-テスト階層と各証跡の限界は `docs/TESTING.md` を参照してください。
+現在の能力境界は `docs/PROJECT_CONTEXT.md`、再現可能なテスト手順と各テスト階層の限界は `docs/TESTING.md` を参照してください。
 
 ---
 

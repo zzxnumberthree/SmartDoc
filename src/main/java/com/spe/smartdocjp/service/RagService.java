@@ -2,6 +2,7 @@ package com.spe.smartdocjp.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.spe.smartdocjp.model.DTO.SearchDTOs.*;
+import com.spe.smartdocjp.exception.RagEmbeddingException;
 import com.spe.smartdocjp.model.entity.Document;
 import com.spe.smartdocjp.model.entity.DocumentChunk;
 import com.spe.smartdocjp.repository.DocumentChunkRepository;
@@ -18,20 +19,27 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
+
+import com.fasterxml.jackson.core.type.TypeReference;
 
 import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class RagService {
+
+    static final String USER_ID_METADATA = "userId";
 
     private final VectorStore vectorStore;
     private final DocumentRepository documentRepository;
@@ -48,12 +56,32 @@ public class RagService {
      * @param doc The Document entity.
      * @param filePath The local disk path to the file.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW, noRollbackFor = Exception.class)
+    @Transactional
     public void embedAndStoreDocument(Document doc, Path filePath) {
         log.info("Starting embedding pipeline for document ID: {}, path: {}", doc.getId(), filePath);
+        List<String> newVectorIds = new ArrayList<>();
+        List<DocumentChunk> priorChunks = List.of();
+        List<String> priorVectorIds = List.of();
+        List<org.springframework.ai.document.Document> chunksToEmbed = new ArrayList<>();
+        List<DocumentChunk> entityChunks = new ArrayList<>();
+
         try {
+            if (doc.getUser() == null || doc.getUser().getId() == null) {
+                throw new IllegalStateException("Document owner is required for RAG indexing");
+            }
+
             doc.setEmbeddingStatus(Document.EmbeddingStatus.processing);
             documentRepository.save(doc);
+
+            // 1. Load active chunks and record their non-empty vector IDs
+            priorChunks = documentChunkRepository.findByDocumentIdOrderByChunkIndexAsc(doc.getId());
+            if (priorChunks == null) {
+                priorChunks = List.of();
+            }
+            priorVectorIds = priorChunks.stream()
+                    .map(DocumentChunk::getVectorId)
+                    .filter(id -> id != null && !id.isBlank())
+                    .toList();
 
             List<org.springframework.ai.document.Document> rawDocs;
             String filename = filePath.getFileName().toString().toLowerCase();
@@ -65,74 +93,175 @@ public class RagService {
                 rawDocs = textReader.get();
             }
 
-            if (rawDocs == null || rawDocs.isEmpty()) {
-                log.warn("No text extracted from document ID: {}", doc.getId());
-                doc.setChunkCount(0);
-                doc.setEmbeddingStatus(Document.EmbeddingStatus.completed);
-                documentRepository.save(doc);
-                return;
-            }
+            boolean hasExtractedText = rawDocs != null && rawDocs.stream()
+                    .anyMatch(d -> d.getText() != null && !d.getText().isBlank());
 
-            TokenTextSplitter splitter = new TokenTextSplitter();
-            List<org.springframework.ai.document.Document> splitChunks = splitter.apply(rawDocs);
+            if (hasExtractedText) {
+                TokenTextSplitter splitter = new TokenTextSplitter();
+                List<org.springframework.ai.document.Document> splitChunks = splitter.apply(rawDocs);
 
-            List<org.springframework.ai.document.Document> chunksToEmbed = new ArrayList<>();
-            List<DocumentChunk> entityChunks = new ArrayList<>();
+                if (splitChunks != null) {
+                    Set<String> existingVectorIdSet = new HashSet<>(priorVectorIds);
 
-            for (int i = 0; i < splitChunks.size(); i++) {
-                org.springframework.ai.document.Document chunk = splitChunks.get(i);
-                Map<String, Object> metadata = new HashMap<>(chunk.getMetadata());
-                metadata.put("documentId", doc.getId());
-                metadata.put("documentTitle", doc.getTitle());
-                metadata.put("chunkIndex", i);
+                    for (int i = 0; i < splitChunks.size(); i++) {
+                        org.springframework.ai.document.Document chunk = splitChunks.get(i);
+                        if (chunk.getText() == null || chunk.getText().isBlank()) {
+                            continue;
+                        }
 
-                org.springframework.ai.document.Document enrichedChunk = new org.springframework.ai.document.Document(
-                        chunk.getId(),
-                        chunk.getText(),
-                        metadata
-                );
-                chunksToEmbed.add(enrichedChunk);
+                        Map<String, Object> metadata = new HashMap<>(chunk.getMetadata());
+                        metadata.put("documentId", doc.getId());
+                        metadata.put("documentTitle", doc.getTitle());
+                        metadata.put("chunkIndex", chunksToEmbed.size());
+                        metadata.put(USER_ID_METADATA, doc.getUser().getId());
 
-                DocumentChunk entityChunk = DocumentChunk.builder()
-                        .document(doc)
-                        .chunkIndex(i)
-                        .vectorId(enrichedChunk.getId())
-                        .content(enrichedChunk.getText())
-                        .metadata(objectMapper.writeValueAsString(metadata))
-                        .isDeleted(false)
-                        .build();
-                entityChunks.add(entityChunk);
-            }
+                        // 2. Build vector IDs that cannot collide with prior generation
+                        String newVectorId = UUID.randomUUID().toString();
+                        while (existingVectorIdSet.contains(newVectorId)) {
+                            newVectorId = UUID.randomUUID().toString();
+                        }
+                        existingVectorIdSet.add(newVectorId);
 
-            // Save chunks to vector store
-            vectorStore.add(chunksToEmbed);
+                        // 3. Every new chunk contains documentId, documentTitle, chunkIndex, userId
+                        org.springframework.ai.document.Document enrichedChunk = new org.springframework.ai.document.Document(
+                                newVectorId,
+                                chunk.getText(),
+                                metadata
+                        );
+                        chunksToEmbed.add(enrichedChunk);
 
-            // Persist SimpleVectorStore to disk if applicable
-            if (vectorStore instanceof SimpleVectorStore simpleStore) {
-                try {
-                    File storeFile = new File(storeFilePath);
-                    simpleStore.save(storeFile);
-                    log.info("Persisted vector store to: {}", storeFile.getAbsolutePath());
-                } catch (Exception e) {
-                    log.error("Failed to save SimpleVectorStore to disk", e);
+                        DocumentChunk entityChunk = DocumentChunk.builder()
+                                .document(doc)
+                                .chunkIndex(chunksToEmbed.size() - 1)
+                                .vectorId(enrichedChunk.getId())
+                                .content(enrichedChunk.getText())
+                                .metadata(objectMapper.writeValueAsString(metadata))
+                                .isDeleted(false)
+                                .build();
+                        entityChunks.add(entityChunk);
+                    }
                 }
+            } else {
+                log.warn("No text extracted from document ID: {}", doc.getId());
             }
 
-            // Save chunks to MySQL table
-            documentChunkRepository.saveAll(entityChunks);
+            newVectorIds = chunksToEmbed.stream()
+                    .map(org.springframework.ai.document.Document::getId)
+                    .toList();
 
-            // Update main document status
-            doc.setChunkCount(chunksToEmbed.size());
-            doc.setEmbeddingStatus(Document.EmbeddingStatus.completed);
-            documentRepository.save(doc);
+            // 4. Add and persist new vectors before deleting old vectors
+            if (!chunksToEmbed.isEmpty()) {
+                vectorStore.add(chunksToEmbed);
+                persistVectorStoreIfFileBacked();
+            }
 
-            log.info("Successfully completed embedding pipeline for document ID: {}, chunks created: {}", doc.getId(), chunksToEmbed.size());
+            // 5. Replace database rows: remove old active rows, flush, save new rows
+            if (!priorChunks.isEmpty()) {
+                documentChunkRepository.deleteAll(priorChunks);
+                documentChunkRepository.flush();
+            }
+            if (!entityChunks.isEmpty()) {
+                documentChunkRepository.saveAllAndFlush(entityChunks);
+            }
 
         } catch (Exception e) {
-            log.error("Failed to embed and store document ID: " + doc.getId(), e);
-            doc.setEmbeddingStatus(Document.EmbeddingStatus.failed);
-            documentRepository.save(doc);
-            // 遵照 GEMINI.md 规则：AI 服务调用异常优雅降级，不抛出异常中断主流程或导致事务回滚 (UnexpectedRollbackException)
+            log.error("Failed to stage RAG index replacement for document ID: " + doc.getId(), e);
+            compensateVectorWrite(newVectorIds, doc.getId());
+            throw (e instanceof RagEmbeddingException re ? re : new RagEmbeddingException(doc.getId(), e));
+        }
+
+        // 6. Delete and persist old vector generation only after new vectors and new database rows succeed
+        // 7. Update chunkCount and embeddingStatus only according to final replacement outcome
+        // 8. Re-indexing yielding no chunks clears prior index and sets chunkCount=0, completed
+        try {
+            if (!priorVectorIds.isEmpty()) {
+                vectorStore.delete(priorVectorIds);
+                persistVectorStoreIfFileBacked();
+                log.info("Deleted {} old vectors from vector store for document ID: {}",
+                        priorVectorIds.size(), doc.getId());
+            }
+
+            doc.setChunkCount(chunksToEmbed.size());
+            doc.setEmbeddingStatus(Document.EmbeddingStatus.completed);
+            documentRepository.saveAndFlush(doc);
+
+            log.info("Successfully completed embedding pipeline for document ID: {}, chunks created: {}",
+                    doc.getId(), chunksToEmbed.size());
+        } catch (Exception postStagingError) {
+            log.error("Failed during old-vector cleanup or document finalization for document ID: {}",
+                    doc.getId(), postStagingError);
+            try {
+                TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
+            } catch (Exception ignored) {}
+            try {
+                compensateVectorWrite(newVectorIds, doc.getId());
+            } catch (Exception compensationError) {
+                log.error("Failed during vector write compensation for document ID: {}", doc.getId(), compensationError);
+            }
+            try {
+                restoreOldVectors(priorChunks, doc.getId());
+            } catch (Exception restoreError) {
+                log.error("Failed during old vector restoration for document ID: {}", doc.getId(), restoreError);
+            }
+            throw new RagEmbeddingException(doc.getId(), postStagingError);
+        }
+    }
+
+    private void persistVectorStoreIfFileBacked() {
+        if (vectorStore instanceof SimpleVectorStore simpleStore) {
+            File storeFile = new File(storeFilePath);
+            simpleStore.save(storeFile);
+            log.info("Persisted vector store to: {}", storeFile.getAbsolutePath());
+        }
+    }
+
+    private void compensateVectorWrite(List<String> vectorIds, Long documentId) {
+        if (vectorIds == null || vectorIds.isEmpty()) {
+            return;
+        }
+
+        try {
+            vectorStore.delete(vectorIds);
+            persistVectorStoreIfFileBacked();
+            log.warn("Compensated {} vector entries after failed indexing for document ID: {}",
+                    vectorIds.size(), documentId);
+        } catch (Exception compensationError) {
+            log.error("Failed to compensate vector entries for document ID: {}", documentId, compensationError);
+        }
+    }
+
+    private void restoreOldVectors(List<DocumentChunk> priorChunks, Long documentId) {
+        if (priorChunks == null || priorChunks.isEmpty()) {
+            return;
+        }
+
+        try {
+            List<org.springframework.ai.document.Document> docsToRestore = new ArrayList<>();
+            for (DocumentChunk chunk : priorChunks) {
+                if (chunk.getVectorId() == null || chunk.getVectorId().isBlank()) {
+                    continue;
+                }
+                Map<String, Object> metadata = new HashMap<>();
+                if (chunk.getMetadata() != null && !chunk.getMetadata().isBlank()) {
+                    try {
+                        metadata = objectMapper.readValue(chunk.getMetadata(), new TypeReference<Map<String, Object>>() {});
+                    } catch (Exception e) {
+                        log.warn("Failed to deserialize metadata for chunk vector ID: {}", chunk.getVectorId(), e);
+                    }
+                }
+                docsToRestore.add(new org.springframework.ai.document.Document(
+                        chunk.getVectorId(),
+                        chunk.getContent() != null ? chunk.getContent() : "",
+                        metadata
+                ));
+            }
+            if (!docsToRestore.isEmpty()) {
+                vectorStore.add(docsToRestore);
+                persistVectorStoreIfFileBacked();
+                log.info("Restored {} old vector entries for document ID: {}", docsToRestore.size(), documentId);
+            }
+        } catch (Exception restoreError) {
+            log.error("Failed to restore old vector entries for document ID: {}", documentId, restoreError);
         }
     }
 
@@ -141,15 +270,18 @@ public class RagService {
      * @param query The user's query string.
      * @param topK Maximum number of results.
      * @param similarityThreshold Minimum similarity threshold.
+     * @param userId Authenticated owner whose chunks may be searched.
      * @return List of SearchResultResponse.
      */
-    public List<SearchResultResponse> search(String query, int topK, double similarityThreshold) {
-        log.info("Executing vector search for query: '{}', topK: {}, threshold: {}", query, topK, similarityThreshold);
+    public List<SearchResultResponse> search(String query, int topK, double similarityThreshold, Long userId) {
+        requireUserId(userId);
+        log.info("Executing vector search for user ID: {}, topK: {}, threshold: {}", userId, topK, similarityThreshold);
 
         SearchRequest request = SearchRequest.builder()
                 .query(query)
                 .topK(topK)
                 .similarityThreshold(similarityThreshold)
+                .filterExpression(USER_ID_METADATA + " == " + userId)
                 .build();
 
         List<org.springframework.ai.document.Document> results = vectorStore.similaritySearch(request);
@@ -199,12 +331,14 @@ public class RagService {
      * Answers a user question based on semantic search over stored documents.
      * @param question The user's question.
      * @param topK Number of chunks to retrieve for context.
+     * @param userId Authenticated owner whose chunks may be used as context.
      * @return AskResponse containing the AI answer and cited sources.
      */
-    public AskResponse ask(String question, int topK) {
-        log.info("Executing RAG ask for question: '{}', topK: {}", question, topK);
+    public AskResponse ask(String question, int topK, Long userId) {
+        requireUserId(userId);
+        log.info("Executing RAG ask for user ID: {}, topK: {}", userId, topK);
 
-        List<SearchResultResponse> sources = search(question, topK, 0.0);
+        List<SearchResultResponse> sources = search(question, topK, 0.0, userId);
 
         StringBuilder contextBuilder = new StringBuilder();
         for (int i = 0; i < sources.size(); i++) {
@@ -242,6 +376,12 @@ public class RagService {
         String answer = client.prompt(finalPrompt).call().content();
 
         return new AskResponse(answer, sources);
+    }
+
+    private void requireUserId(Long userId) {
+        if (userId == null || userId <= 0) {
+            throw new IllegalArgumentException("Authenticated user ID is required for RAG access");
+        }
     }
 
     /**

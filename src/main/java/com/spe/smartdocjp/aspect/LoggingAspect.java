@@ -41,8 +41,8 @@ public class LoggingAspect {
             // 执行目标方法
             result = joinPoint.proceed();
         } catch (Throwable ex) {
-            // 记录异常日志，不仅包含消息，最好包含堆栈（此处简化为消息）
-            logger.error("!! [Exception] {}.{}: Error: {}", className, methodName, ex.getMessage());
+            // 记录异常日志，包含完整堆栈以便线上排查
+            logger.error("!! [Exception] {}.{}: Error: {}", className, methodName, ex.getMessage(), ex);
             // 必须重新抛出异常，否则 Controller 层会认为方法执行成功并收到 null 返回值
             throw ex;
         }

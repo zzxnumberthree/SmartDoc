@@ -1,5 +1,6 @@
 package com.spe.smartdocjp.controller;
 
+import com.spe.smartdocjp.security.SecurityUtils;
 import com.spe.smartdocjp.service.DocumentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -12,7 +13,7 @@ import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
-import java.io.IOException;
+import java.util.List;
 
 /**
  Web controller for serving HTML views.
@@ -33,7 +34,9 @@ public class WebController {
      */
     @GetMapping("/")
     public String index(Model model) {
-        model.addAttribute("documents", documentService.getAllDocumentsForView());
+        Long userId = SecurityUtils.getCurrentUserId();
+        model.addAttribute("documents",
+                userId == null ? List.of() : documentService.getAllDocumentsForView());
         return "index";
     }
 
@@ -47,7 +50,7 @@ public class WebController {
     }
 
     /**
-     Redirects GET requests to /upload-view back to home to prevent 405/NoResourceFound errors.
+     Redirects authenticated GET requests to /upload-view back to home.
      @return A redirect to home page ("/").
      */
     @GetMapping("/upload-view")
@@ -58,20 +61,19 @@ public class WebController {
     /**
      Handles file uploads from a web form and redirects to the main page.
      @param file The uploaded file.
-     @param userId The ID of the uploading user.
      @param redirectAttributes Flash attributes for feedback messages.
      @return A redirect to the home page ("/").
      */
     @PostMapping("/upload-view")
-    public String upload(@RequestParam("file") MultipartFile file, 
-                         @RequestParam("userId") Long userId,
+    public String upload(@RequestParam("file") MultipartFile file,
                          RedirectAttributes redirectAttributes) {
+        SecurityUtils.requireCurrentUserId();
         try {
-            documentService.uploadDocument(file, userId);
+            documentService.uploadDocument(file);
             redirectAttributes.addFlashAttribute("message", "文件上传并处理成功！");
         } catch (Exception e) {
-            log.error("File upload failed for user {}: {}", userId, e.getMessage(), e);
-            redirectAttributes.addFlashAttribute("error", "上传处理发生异常: " + e.getMessage());
+            log.error("File upload failed", e);
+            redirectAttributes.addFlashAttribute("error", "上传处理发生异常，请稍后重试。");
         }
         return "redirect:/";
     }

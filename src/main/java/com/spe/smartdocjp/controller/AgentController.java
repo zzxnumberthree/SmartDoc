@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 
@@ -33,7 +34,8 @@ public class AgentController {
     @Operation(summary = "多轮对话 (同步返回)", description = "与 AI Agent 进行多轮对话，等待完整回答后返回")
     @PostMapping("/chat")
     public ResponseEntity<ApiResponse<AgentChatResponse>> chat(@Valid @RequestBody AgentChatRequest request) {
-        log.info("REST request for AI Agent chat in conversation '{}': '{}'", request.getEffectiveConversationId(), request.message());
+        log.info("REST request for AI Agent chat in conversation '{}' (inputLength={})",
+                request.getEffectiveConversationId(), request.message() != null ? request.message().length() : 0);
         AgentChatResponse response = agentService.chat(request);
         return ResponseEntity.ok(ApiResponse.success(response));
     }
@@ -41,29 +43,34 @@ public class AgentController {
     /**
      * Handles multi-turn chat interaction returning Server-Sent Events (SSE) data stream via POST.
      * @param request The chat request.
-     * @return Flux of String tokens.
+     * @return Named token, complete, or error SSE events.
      */
     @Operation(summary = "多轮对话 (SSE 流式 POST)", description = "通过 POST 请求获取 SSE 流式回答")
     @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> chatStreamPost(@Valid @RequestBody AgentChatRequest request) {
+    public Flux<ServerSentEvent<AgentStreamEvent>> chatStreamPost(@Valid @RequestBody AgentChatRequest request) {
         log.info("REST POST request for AI Agent SSE chat stream in conversation '{}'", request.getEffectiveConversationId());
-        // SSE flow doesn't use ApiResponse wrapper to allow standard EventSource consumption.
-        return agentService.chatStream(request);
+        return toServerSentEvents(agentService.chatStream(request));
     }
 
     /**
      * Handles multi-turn chat interaction returning Server-Sent Events (SSE) data stream via GET (for native EventSource).
      * @param message The user prompt.
      * @param conversationId Optional conversation ID.
-     * @return Flux of String tokens.
+     * @return Named token, complete, or error SSE events.
      */
     @Operation(summary = "多轮对话 (SSE 流式 GET)", description = "通过 GET 请求获取 SSE 流式回答，适合浏览器原生 EventSource API")
     @GetMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> chatStreamGet(@RequestParam("message") String message,
-                                      @RequestParam(value = "conversationId", required = false) String conversationId) {
+    public Flux<ServerSentEvent<AgentStreamEvent>> chatStreamGet(
+            @RequestParam("message") String message,
+            @RequestParam(value = "conversationId", required = false) String conversationId) {
         log.info("REST GET request for AI Agent SSE chat stream in conversation '{}'", conversationId);
         AgentChatRequest request = new AgentChatRequest(message, conversationId);
-        // SSE flow doesn't use ApiResponse wrapper.
-        return agentService.chatStream(request);
+        return toServerSentEvents(agentService.chatStream(request));
+    }
+
+    private Flux<ServerSentEvent<AgentStreamEvent>> toServerSentEvents(Flux<AgentStreamEvent> events) {
+        return events.map(event -> ServerSentEvent.<AgentStreamEvent>builder(event)
+                .event(event.type().wireName())
+                .build());
     }
 }

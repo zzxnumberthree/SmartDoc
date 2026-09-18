@@ -139,20 +139,29 @@ jq -e --arg marker "${marker}" --argjson document_id "${document_id}" \
   '.data.sources | any(.documentId == $document_id and (.content | contains($marker)))' \
   <<<"${ask_response}" >/dev/null
 
+stream_payload="$(jq -n \
+  --arg message 'Reply with at least five short sentences confirming that the container SSE stream works.' \
+  --arg conversationId 'compose-smoke' \
+  '{message: $message, conversationId: $conversationId}')"
 curl --fail --silent --show-error --no-buffer --max-time 120 \
-  --get \
+  --request POST \
   --header "Authorization: Bearer ${token}" \
   --header 'Accept: text/event-stream' \
-  --data-urlencode 'message=Reply with at least five short sentences confirming that the container SSE stream works.' \
-  --data-urlencode 'conversationId=compose-smoke' \
+  --header 'Content-Type: application/json' \
+  --data "${stream_payload}" \
   "${base_url}/api/agent/chat/stream" > "${temporary_directory}/stream.txt"
 data_frame_count="$(grep -c '^data:' "${temporary_directory}/stream.txt")"
 if (( data_frame_count < 2 )); then
   echo "Expected at least two SSE data frames, received ${data_frame_count}." >&2
   exit 1
 fi
-if grep -Eq '安全护栏拦截|AI服务连接提示' "${temporary_directory}/stream.txt"; then
-  echo "SSE endpoint returned a guardrail or provider error frame." >&2
+if grep -q '^event:error' "${temporary_directory}/stream.txt"; then
+  echo "SSE endpoint returned a terminal error event." >&2
+  exit 1
+fi
+if ! grep -q '^event:token' "${temporary_directory}/stream.txt" || \
+   ! grep -q '^event:complete' "${temporary_directory}/stream.txt"; then
+  echo "SSE endpoint did not return both token and complete events." >&2
   exit 1
 fi
 

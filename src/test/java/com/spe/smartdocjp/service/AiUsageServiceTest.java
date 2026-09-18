@@ -85,7 +85,7 @@ class AiUsageServiceTest {
         when(aiUsageRepository.sumTokensAfter(any(LocalDateTime.class))).thenReturn(3000L);
         when(aiUsageRepository.sumTotalCost()).thenReturn(new BigDecimal("0.0150"));
         when(aiUsageRepository.sumCostAfter(any(LocalDateTime.class))).thenReturn(new BigDecimal("0.0045"));
-        when(aiUsageRepository.findAll()).thenReturn(Collections.emptyList());
+        when(aiUsageRepository.countByOperationType()).thenReturn(Collections.emptyList());
 
         AiUsageSummaryDTO summary = aiUsageService.getUsageSummary();
 

@@ -39,7 +39,8 @@ public class SecurityConfig {
                 .requestMatchers("/actuator/health", "/actuator/health/**").permitAll() // 容器编排只读取健康状态，不暴露详细信息
                 .requestMatchers("/actuator/**").hasRole("ADMIN") // Actuator 仅限 ADMIN
                 .requestMatchers("/api/**").authenticated() // 其他 API 需要认证
-                .anyRequest().permitAll() // 允许 Thymeleaf 静态资源及首页直接访问（首页前端会根据 Token 判断是否渲染数据）
+                .requestMatchers("/", "/index", "/index.html", "/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll() // 允许 Thymeleaf 静态资源及首页
+                .anyRequest().authenticated() // 白名单模式：默认拒绝所有未配置路由，防止新增端点遗漏
             )
             .sessionManagement(session -> session
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS) // API 使用无状态 Session

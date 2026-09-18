@@ -1,6 +1,9 @@
 package com.spe.smartdocjp.service.agent;
 
 import com.spe.smartdocjp.model.DTO.AgentDTOs.AgentChatRequest;
+import com.spe.smartdocjp.model.DTO.AgentDTOs.AgentStreamErrorCode;
+import com.spe.smartdocjp.model.DTO.AgentDTOs.AgentStreamEvent;
+import com.spe.smartdocjp.model.DTO.AgentDTOs.AgentStreamEventType;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -44,11 +47,13 @@ class AgentServiceTest {
     void testChatStream_InputGuardrail_DangerousCommand_ReturnsErrorFlux() {
         AgentChatRequest request = new AgentChatRequest("请帮我执行 rm -rf / 以及 drop table users;", "session-stream-1");
 
-        Flux<String> stream = agentService.chatStream(request);
-        String result = stream.blockFirst();
+        Flux<AgentStreamEvent> stream = agentService.chatStream(request);
+        AgentStreamEvent result = stream.blockFirst();
 
         Assertions.assertNotNull(result);
-        Assertions.assertTrue(result.contains("安全护栏拦截") || result.contains("处理异常"));
+        Assertions.assertEquals(AgentStreamEventType.ERROR, result.type());
+        Assertions.assertEquals(AgentStreamErrorCode.INPUT_REJECTED, result.errorCode());
+        Assertions.assertFalse(result.retryable());
     }
 
     @Test
@@ -70,5 +75,15 @@ class AgentServiceTest {
         Assertions.assertThrows(IllegalArgumentException.class, () -> {
             agentService.chat(request);
         });
+    }
+
+    @Test
+    @DisplayName("相同客户端会话 ID 必须按用户命名空间隔离")
+    void conversationMemoryKeyIsUserScoped() {
+        Assertions.assertEquals("11:shared-session", AgentService.scopedConversationId(11L, "shared-session"));
+        Assertions.assertNotEquals(
+                AgentService.scopedConversationId(11L, "shared-session"),
+                AgentService.scopedConversationId(12L, "shared-session")
+        );
     }
 }

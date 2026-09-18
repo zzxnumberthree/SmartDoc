@@ -16,7 +16,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -113,13 +112,12 @@ public class AiUsageService {
         BigDecimal totalCost = aiUsageRepository.sumTotalCost();
         BigDecimal todayCost = aiUsageRepository.sumCostAfter(todayStart);
 
-        // Group total calls by operation type
-        List<AiUsageRecord> allRecords = aiUsageRepository.findAll();
-        Map<String, Long> callsByOperation = allRecords.stream()
-                .filter(r -> !Boolean.TRUE.equals(r.getIsDeleted()))
-                .collect(Collectors.groupingBy(
-                        r -> r.getOperationType() != null ? r.getOperationType() : "UNKNOWN",
-                        Collectors.counting()
+        // 使用 JPQL 聚合查询代替 findAll() + Java 端聚合，避免数据量增大时的 OOM 风险
+        List<Object[]> operationCounts = aiUsageRepository.countByOperationType();
+        Map<String, Long> callsByOperation = operationCounts.stream()
+                .collect(Collectors.toMap(
+                        row -> row[0] != null ? (String) row[0] : "UNKNOWN",
+                        row -> (Long) row[1]
                 ));
 
         return AiUsageSummaryDTO.builder()

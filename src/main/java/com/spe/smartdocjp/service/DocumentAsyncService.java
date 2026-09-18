@@ -1,5 +1,6 @@
 package com.spe.smartdocjp.service;
 
+import com.spe.smartdocjp.exception.RagEmbeddingException;
 import com.spe.smartdocjp.model.entity.Document;
 import com.spe.smartdocjp.repository.DocumentRepository;
 import lombok.RequiredArgsConstructor;
@@ -9,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.nio.file.Path;
 import java.util.List;
+import com.spe.smartdocjp.service.AiAnalysisService.SummaryResult;
 import com.spe.smartdocjp.service.parser.DocumentParser;
 
 /**
@@ -19,6 +21,8 @@ import com.spe.smartdocjp.service.parser.DocumentParser;
 @RequiredArgsConstructor
 @Slf4j
 public class DocumentAsyncService {
+
+    static final String PROCESSING_FAILED_MESSAGE = "AI / RAG 处理失败，请稍后重试。";
 
     private final DocumentRepository documentRepository;
     private final AiAnalysisService aiAnalysisService;
@@ -34,21 +38,15 @@ public class DocumentAsyncService {
     @Async("documentTaskExecutor")
     public void processAiAndRagAsync(Long documentId, Path targetLocation) {
         log.info("[Async Start] Starting async AI analysis and RAG pipeline for document ID: {}", documentId);
-        Document doc = null;
-        for (int i = 0; i < 5; i++) {
-            doc = documentRepository.findById(documentId).orElse(null);
-            if (doc != null) {
-                break;
-            }
-            try {
-                Thread.sleep(200);
-            } catch (InterruptedException ignored) {}
-        }
+        // afterCommit 已保证事务提交后才触发此方法，因此直接查询即可，无需轮询重试
+        Document doc = documentRepository.findById(documentId).orElse(null);
         if (doc == null) {
-            log.warn("Document not found for async processing after retries, ID: {}", documentId);
+            log.warn("Document not found for async processing, ID: {}", documentId);
             return;
         }
 
+        boolean summaryGenerated = false;
+        boolean ragStarted = false;
         try {
             // Update status to processing
             doc.setStatus(Document.DocStatus.processing);
@@ -62,7 +60,7 @@ public class DocumentAsyncService {
                 extension = originalFilename.substring(originalFilename.lastIndexOf("."));
             }
 
-            String summary = "Unsupported format: " + originalFilename;
+            SummaryResult summaryResult = SummaryResult.unsupportedFormat();
             DocumentParser matchedParser = null;
             for (DocumentParser parser : parsers) {
                 if (parser.supports(extension)) {
@@ -72,32 +70,67 @@ public class DocumentAsyncService {
             }
 
             if (matchedParser != null) {
-                summary = aiAnalysisService.analyzeDocumentWithRetry(matchedParser, targetLocation, originalFilename);
+                summaryResult = aiAnalysisService.analyzeDocumentWithRetry(
+                        matchedParser, targetLocation, originalFilename);
             } else {
                 log.warn("No suitable DocumentParser found for file: {}", originalFilename);
             }
 
-            doc.setSummary(summary);
-            if (summary != null && (summary.startsWith("AI 服务暂时不可用") || summary.startsWith("Unsupported format"))) {
+            doc.setSummary(summaryResult.content());
+            boolean summaryFailed = !summaryResult.successful();
+            summaryGenerated = !summaryFailed;
+            if (summaryFailed) {
                 doc.setStatus(Document.DocStatus.failed);
             } else {
-                doc.setStatus(Document.DocStatus.completed);
+                // Overall completion requires both summary generation and RAG indexing.
+                doc.setStatus(Document.DocStatus.processing);
             }
             documentRepository.save(doc);
-            log.info("[Async AI Done] AI summary generated for document ID: {}, status: {}", documentId, doc.getStatus());
+            if (summaryGenerated) {
+                log.info("[Async AI Done] AI summary generated for document ID: {}, status: {}",
+                        documentId, doc.getStatus());
+            } else {
+                log.warn("[Async AI Failed] Summary generation failed for document ID: {}, status: {}",
+                        documentId, doc.getStatus());
+            }
 
             // Execute RAG chunking and vector embedding
+            ragStarted = true;
             ragService.embedAndStoreDocument(doc, targetLocation);
-            log.info("[Async Complete] Full async pipeline finished for document ID: {}", documentId);
 
+            if (summaryFailed) {
+                log.warn("[Async Partial Failure] RAG indexing completed but summary generation failed for document ID: {}",
+                        documentId);
+            } else {
+                doc.setStatus(Document.DocStatus.completed);
+                documentRepository.save(doc);
+                log.info("[Async Complete] Full async pipeline finished for document ID: {}", documentId);
+            }
+
+        } catch (RagEmbeddingException e) {
+            persistIndexFailure(doc, documentId, e);
         } catch (Exception e) {
-            log.error("[Async Error] Async processing failed for document ID: {}: {}", documentId, e.getMessage(), e);
+            if (ragStarted) {
+                persistIndexFailure(doc, documentId, e);
+                return;
+            }
+            log.error("[Async Error] Async processing failed for document ID: {}", documentId, e);
             if (doc != null) {
                 doc.setStatus(Document.DocStatus.failed);
                 doc.setEmbeddingStatus(Document.EmbeddingStatus.failed);
-                doc.setSummary("AI / RAG 处理失败: " + e.getMessage());
+                if (!summaryGenerated) {
+                    doc.setSummary(PROCESSING_FAILED_MESSAGE);
+                }
                 documentRepository.save(doc);
             }
         }
+    }
+
+    private void persistIndexFailure(Document doc, Long documentId, Exception failure) {
+        log.error("[Async RAG Error] Summary was retained but RAG indexing failed for document ID: {}",
+                documentId, failure);
+        doc.setStatus(Document.DocStatus.failed);
+        doc.setEmbeddingStatus(Document.EmbeddingStatus.failed);
+        documentRepository.save(doc);
     }
 }

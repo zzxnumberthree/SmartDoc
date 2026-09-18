@@ -2,6 +2,7 @@ package com.spe.smartdocjp.controller;
 
 import com.spe.smartdocjp.common.ApiResponse;
 import com.spe.smartdocjp.model.DTO.SearchDTOs.*;
+import com.spe.smartdocjp.security.SecurityUtils;
 import com.spe.smartdocjp.service.RagService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -33,11 +34,13 @@ public class SearchController {
     @Operation(summary = "向量检索", description = "根据输入的自然语言问题，从文档切片库中检索相似度最高的内容片段")
     @PostMapping("/query")
     public ResponseEntity<ApiResponse<List<SearchResultResponse>>> search(@Valid @RequestBody SearchQueryRequest request) {
-        log.info("REST request for vector search: {}", request.query());
+        Long userId = SecurityUtils.requireCurrentUserId();
+        log.info("REST request for vector search by user ID: {}", userId);
         List<SearchResultResponse> results = ragService.search(
                 request.query(),
                 request.getEffectiveTopK(),
-                request.getEffectiveThreshold()
+                request.getEffectiveThreshold(),
+                userId
         );
         return ResponseEntity.ok(ApiResponse.success(results, "检索成功"));
     }
@@ -50,10 +53,12 @@ public class SearchController {
     @Operation(summary = "智能问答", description = "基于 RAG（检索增强生成）回答问题，提供引用来源")
     @PostMapping("/ask")
     public ResponseEntity<ApiResponse<AskResponse>> ask(@Valid @RequestBody AskRequest request) {
-        log.info("REST request for RAG ask: {}", request.question());
+        Long userId = SecurityUtils.requireCurrentUserId();
+        log.info("REST request for RAG ask by user ID: {}", userId);
         AskResponse response = ragService.ask(
                 request.question(),
-                request.getEffectiveTopK()
+                request.getEffectiveTopK(),
+                userId
         );
         return ResponseEntity.ok(ApiResponse.success(response, "问答成功"));
     }
