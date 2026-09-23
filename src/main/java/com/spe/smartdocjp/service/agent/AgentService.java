@@ -16,6 +16,7 @@ import reactor.core.publisher.Flux;
 import java.net.SocketTimeoutException;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
@@ -34,6 +35,9 @@ public class AgentService {
 
     @Value("classpath:prompts/agent-system.st")
     private Resource systemPromptResource;
+
+    @Value("${smartdoc.agent.stream-idle-timeout:60s}")
+    private Duration streamIdleTimeout = Duration.ofSeconds(60);
 
     private static final Pattern DANGEROUS_INPUT_PATTERN = Pattern.compile(
             "(?i).*(rm\\s+-rf|drop\\s+table|delete\\s+from|truncate\\s+table|<script>|exec\\().*",
@@ -146,6 +150,7 @@ public class AgentService {
                                     .param("chat_memory_response_size", 30))
                     .stream()
                     .content()
+                    .timeout(resolveStreamIdleTimeout())
                     .map(this::validateOutputGuardrail)
                     .map(delta -> AgentStreamEvent.token(conversationId, delta));
 
@@ -190,6 +195,16 @@ public class AgentService {
             current = current.getCause();
         }
         return false;
+    }
+
+    private Duration resolveStreamIdleTimeout() {
+        return (streamIdleTimeout != null && !streamIdleTimeout.isNegative() && !streamIdleTimeout.isZero())
+                ? streamIdleTimeout
+                : Duration.ofSeconds(60);
+    }
+
+    void setStreamIdleTimeout(Duration streamIdleTimeout) {
+        this.streamIdleTimeout = streamIdleTimeout;
     }
 
     static String scopedConversationId(Long userId, String conversationId) {

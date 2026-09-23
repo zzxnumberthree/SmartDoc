@@ -24,7 +24,10 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
@@ -68,6 +71,95 @@ class AgentStreamContractTest {
         assertEquals("TOKEN_ONE ", events.get(0).delta());
         assertEquals("TOKEN_TWO", events.get(1).delta());
         assertNull(events.get(2).errorCode());
+        assertEquals(1, model.streamCalls());
+    }
+
+    @Test
+    void streamIdleTimeoutBeforeFirstTokenCancelsProviderAndEmitsSafeTimeoutError() throws Exception {
+        CountDownLatch providerSubscribed = new CountDownLatch(1);
+        CountDownLatch providerCancelled = new CountDownLatch(1);
+        StubStreamingChatModel model = new StubStreamingChatModel(
+                () -> Flux.<ChatResponse>never()
+                        .doOnSubscribe(ignored -> providerSubscribed.countDown())
+                        .doOnCancel(providerCancelled::countDown));
+        AgentService service = service(model);
+        service.setStreamIdleTimeout(Duration.ofMillis(100));
+        authenticate(42L);
+
+        List<AgentStreamEvent> events = service.chatStream(
+                        new AgentChatRequest("首个token超时测试", CONVERSATION_ID))
+                .collectList()
+                .block(Duration.ofSeconds(2));
+
+        assertTrue(providerSubscribed.await(1, TimeUnit.SECONDS));
+        assertTrue(providerCancelled.await(1, TimeUnit.SECONDS));
+        assertEquals(1, events.size());
+        AgentStreamEvent error = events.getFirst();
+        assertEquals(AgentStreamEventType.ERROR, error.type());
+        assertEquals(AgentStreamErrorCode.MODEL_TIMEOUT, error.errorCode());
+        assertTrue(error.retryable());
+        assertEquals("模型服务响应超时，请稍后重试。", error.message());
+        assertFalse(error.errorId().isBlank());
+        assertFalse(events.stream().anyMatch(event -> event.type() == AgentStreamEventType.COMPLETE));
+        assertFalse(events.toString().contains("SECRET"));
+        assertEquals(1, model.streamCalls());
+    }
+
+    @Test
+    void streamIdleTimeoutBetweenTokensCancelsProviderAndEmitsSafeTimeoutErrorWithoutCompletion() throws Exception {
+        CountDownLatch providerCancelled = new CountDownLatch(1);
+        StubStreamingChatModel model = new StubStreamingChatModel(
+                () -> Flux.concat(
+                        Flux.just(response("SAFE_TOKEN_BEFORE_STALL")),
+                        Flux.<ChatResponse>never().doOnCancel(providerCancelled::countDown)));
+        AgentService service = service(model);
+        service.setStreamIdleTimeout(Duration.ofMillis(100));
+        authenticate(42L);
+
+        List<AgentStreamEvent> events = service.chatStream(
+                        new AgentChatRequest("Token间停顿超时测试", CONVERSATION_ID))
+                .collectList()
+                .block(Duration.ofSeconds(2));
+
+        assertTrue(providerCancelled.await(1, TimeUnit.SECONDS));
+        assertEquals(2, events.size());
+        assertEquals(AgentStreamEventType.TOKEN, events.get(0).type());
+        assertEquals("SAFE_TOKEN_BEFORE_STALL", events.get(0).delta());
+        AgentStreamEvent error = events.get(1);
+        assertEquals(AgentStreamEventType.ERROR, error.type());
+        assertEquals(AgentStreamErrorCode.MODEL_TIMEOUT, error.errorCode());
+        assertTrue(error.retryable());
+        assertEquals("模型服务响应超时，请稍后重试。", error.message());
+        assertFalse(error.errorId().isBlank());
+        assertFalse(events.stream().anyMatch(event -> event.type() == AgentStreamEventType.COMPLETE));
+        assertEquals(1, model.streamCalls());
+    }
+
+    @Test
+    void activelyProducingStreamExceedingTotalDurationDoesNotTimeout() {
+        StubStreamingChatModel model = new StubStreamingChatModel(() -> Flux.concat(
+                Flux.just(response("PART_1")).delayElements(Duration.ofMillis(40)),
+                Flux.just(response("PART_2")).delayElements(Duration.ofMillis(40)),
+                Flux.just(response("PART_3")).delayElements(Duration.ofMillis(40))));
+        AgentService service = service(model);
+        service.setStreamIdleTimeout(Duration.ofMillis(100));
+        authenticate(42L);
+
+        List<AgentStreamEvent> events = service.chatStream(
+                        new AgentChatRequest("持续产出不超时测试", CONVERSATION_ID))
+                .collectList()
+                .block(Duration.ofSeconds(2));
+
+        assertEquals(4, events.size());
+        assertEquals(List.of(
+                        AgentStreamEventType.TOKEN,
+                        AgentStreamEventType.TOKEN,
+                        AgentStreamEventType.TOKEN,
+                        AgentStreamEventType.COMPLETE),
+                events.stream().map(AgentStreamEvent::type).toList());
+        assertEquals("PART_1", events.get(0).delta());
+        assertEquals("PART_2", events.get(1).delta());
+        assertEquals("PART_3", events.get(2).delta());
         assertEquals(1, model.streamCalls());
     }
 
