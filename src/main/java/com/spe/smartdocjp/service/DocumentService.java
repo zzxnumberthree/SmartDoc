@@ -26,8 +26,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import com.spe.smartdocjp.model.DTO.UpdateDocRequest;
+import com.spe.smartdocjp.service.parser.DocumentParser;
 
 @Service
 @RequiredArgsConstructor
@@ -39,10 +41,13 @@ public class DocumentService {
     private final AiAnalysisService aiAnalysisService;
     private final RagService ragService;
     private final DocumentAsyncService documentAsyncService;
+    private final List<DocumentParser> parsers;
     @Value("${smartdoc.upload-dir:./uploads}")
     private String uploadDirectory;
     // ./uploads 表示放在项目根目录下叫 uploads
     // 获取文件存放的根目录，转成绝对路径，清除多余..防止路径注入，适配不同平台
+
+    private static final String INVALID_FILENAME_MESSAGE = "不支持的文件名或文件格式 (Invalid or unsupported file name)";
 
     /**
      Uploads a file, stores it on disk, analyzes it with AI, and saves the record.
@@ -59,6 +64,10 @@ public class DocumentService {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("上传的文件不能为空 (File is empty)");
         }
+
+        String originalFilename = file.getOriginalFilename();
+        String extension = validateAndExtractExtension(originalFilename);
+
         Long userId = SecurityUtils.requireCurrentUserId();
         // 先确保 存储目录存在
         Path fileStorageLocation = getFileStorageLocation();
@@ -68,15 +77,7 @@ public class DocumentService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("当前认证用户不存在 (User not found)"));
 
-        // 存储前重新给文件命名 使用UUID
-        String originalFilename = file.getOriginalFilename();
-        String extension = ""; // extension 表示后缀名
-
-        if (originalFilename.contains(".")) {
-            extension = originalFilename.substring(originalFilename.lastIndexOf("."));
-        }
-        // 以UUID码为文件名储存在磁盘
-        //  String sortedFilename = UUID.randomUUID().toString() + extension;
+        // 存储前重新给文件命名 使用UUID 与 验证后的全小写后缀名
         String sortedFilename = UUID.randomUUID() + extension;
 
         // 文件存储到磁盘的路径
@@ -271,5 +272,32 @@ public class DocumentService {
         return Paths.get(configuredDirectory).toAbsolutePath().normalize();
     }
 
+    private String validateAndExtractExtension(String originalFilename) {
+        if (originalFilename == null || originalFilename.isBlank()) {
+            throw new IllegalArgumentException(INVALID_FILENAME_MESSAGE);
+        }
+        if (originalFilename.indexOf('/') >= 0 || originalFilename.indexOf('\\') >= 0 || originalFilename.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException(INVALID_FILENAME_MESSAGE);
+        }
+        int lastDotIndex = originalFilename.lastIndexOf('.');
+        if (lastDotIndex <= 0 || originalFilename.substring(0, lastDotIndex).isBlank()
+                || lastDotIndex == originalFilename.length() - 1) {
+            throw new IllegalArgumentException(INVALID_FILENAME_MESSAGE);
+        }
+        String extension = originalFilename.substring(lastDotIndex).toLowerCase(Locale.ROOT);
+        boolean supported = false;
+        if (parsers != null) {
+            for (DocumentParser parser : parsers) {
+                if (parser.supports(extension)) {
+                    supported = true;
+                    break;
+                }
+            }
+        }
+        if (!supported) {
+            throw new IllegalArgumentException(INVALID_FILENAME_MESSAGE);
+        }
+        return extension;
+    }
 
 }
