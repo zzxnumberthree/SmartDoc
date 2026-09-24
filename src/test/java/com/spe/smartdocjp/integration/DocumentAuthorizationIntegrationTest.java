@@ -140,8 +140,14 @@ class DocumentAuthorizationIntegrationTest {
         Document documentB = saveDocument(
                 ((CustomUserDetails) userB.getPrincipal()).getUser(), "LIST_B", "LIST_B_SUMMARY");
 
-        String userAList = mockMvc.perform(get("/api/documents").with(authentication(userA)))
+        String userAList = mockMvc.perform(get("/api/documents")
+                        .param("size", "100")
+                        .param("sort", "createdAt,desc")
+                        .with(authentication(userA)))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].status").value("completed"))
+                .andExpect(jsonPath("$.data.content[0].summary").value("LIST_A_SUMMARY"))
+                .andExpect(jsonPath("$.data.totalPages").value(1))
                 .andReturn().getResponse().getContentAsString();
         assertTrue(userAList.contains(documentA.getOriginalFilename()));
         assertFalse(userAList.contains(documentB.getOriginalFilename()));
@@ -253,6 +259,8 @@ class DocumentAuthorizationIntegrationTest {
             assertTrue(mockMvc.perform(get("/api/documents/{id}", document.getId())
                             .with(authentication(owner)))
                     .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.status").value("processing"))
+                    .andExpect(jsonPath("$.data.summary").value("正在重新进行 AI 摘要与 RAG 向量化处理..."))
                     .andReturn().getResponse().getContentAsString().contains(document.getOriginalFilename()));
             verify(documentAsyncService, times(1)).processAiAndRagAsync(document.getId(), source.toRealPath());
 

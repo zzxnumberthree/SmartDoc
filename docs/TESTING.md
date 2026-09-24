@@ -4,6 +4,8 @@ The default application test workflow is deterministic and does not require a lo
 
 ## Current evidence snapshot
 
+On 2026-09-24, after the document restore API and Web client changes, this Windows host ran `clean verify` with Java 21.0.1: **84 tests passed, 0 failed, 0 errors, 0 skipped** across 18 Surefire XML reports. The generated JaCoCo report measured **75.10% line coverage** and **44.37% branch coverage**. `node scripts/test-document-web-client.mjs` also passed using Node 24.15.0. These are deterministic local results, not MySQL, live Gemini, or browser proof.
+
 On 2026-09-18, after implementing the structured API validation contract and aligning the registration OpenAPI description, the Windows host ran `clean verify` with Maven 3.9.12, Java 21.0.1, and JaCoCo 0.8.15: **61 tests passed, 0 failed, 0 errors, 0 skipped** across 17 default test classes (17 Surefire XML reports). The report measured **72.99% line coverage** and **38.59% branch coverage**. See `docs/demo-results/2026-09-18-api-contract-coverage.md` for the report-level counters and scope (earlier snapshots are retained in `docs/demo-results/2026-09-18-windows-coverage.md` and `docs/demo-results/2026-09-16-windows-coverage.md`).
 
 The focused commands used by the interview runbook also passed in a timed rehearsal. See `docs/demo-results/2026-09-15-windows-deterministic.md`; its elapsed times are demo-planning notes, not performance evidence.
@@ -40,7 +42,7 @@ Generated local files:
 - `target/site/jacoco/jacoco.xml`
 - `target/site/jacoco/jacoco.csv`
 
-JaCoCo is configured without production-class exclusions and without a coverage threshold. The `report` goal runs during `verify`; `mvn test` still runs the tests but does not generate the report. No Failsafe execution is configured, so `clean verify` covers the 61 default `*Test` tests across 17 Surefire XML reports and does not execute the optional `*IT` classes.
+JaCoCo is configured without production-class exclusions and without a coverage threshold. The `report` goal runs during `verify`; `mvn test` still runs the tests but does not generate the report. No Failsafe execution is configured, so `clean verify` covers the current default `*Test` suite and does not execute the optional `*IT` classes.
 
 The current retained 2026-09-18 baseline is 72.99% lines, 38.59% branches, 64.22% instructions, 48.60% complexity, 68.43% methods, and 91.25% classes. Coverage shows which bytecode was exercised; it does not prove assertion quality, provider behavior, portability, reliability, or performance. The class counter reaching 91.25% does not mean overall “90%+ coverage”; line and branch coverage remain substantially lower.
 
@@ -74,7 +76,15 @@ This Spring context test calls the proxied `AiAnalysisService`, injects two pars
 .\mvnw.cmd -Dtest=DocumentAuthorizationIntegrationTest test
 ```
 
-This six-scenario H2/MockMvc suite uses real repositories and `CustomUserDetails` principals for two ordinary users plus an administrator. It verifies that foreign and unknown document IDs return the same 404 contract; status/detail/update/re-analysis/delete reject cross-user access without changing state; owners and administrators can perform the permitted mutations; every unknown single-document operation returns 404; active and deleted lists are owner-scoped while administrators can view all; the anonymous home page contains no document data; both upload endpoints derive ownership only from authentication even when a spoofed `userId` parameter is supplied; the REST upload acknowledgement excludes user credentials and storage fields; and protected RAG endpoints fail closed when an authenticated principal cannot be mapped to an application user. `DocumentAsyncService` is mocked in this suite only to prevent unrelated background AI work; authorization, controllers, services, security filters, and persistence remain real.
+This nine-scenario H2/MockMvc suite uses real repositories and `CustomUserDetails` principals for ordinary users plus an administrator. It verifies that foreign and unknown document IDs return the same 404 contract; status/detail/update/re-analysis/delete reject cross-user access without changing state; owners and administrators can perform the permitted mutations; every unknown single-document operation returns 404; active and deleted lists are owner-scoped while administrators can view all; the anonymous home page contains no document data; both upload endpoints derive ownership only from authentication even when a spoofed `userId` parameter is supplied; the REST upload acknowledgement excludes user credentials and storage fields; and protected RAG endpoints fail closed when an authenticated principal cannot be mapped to an application user. Restore scenarios verify owner/admin scope, safe 404/409 responses, source-path checks, processing state, and exactly one scheduled async rebuild. `DocumentAsyncService` is mocked in this suite to prevent unrelated background AI work; authorization, controllers, services, security filters, and persistence remain real.
+
+## Scripted document Web client flow
+
+```powershell
+node scripts/test-document-web-client.mjs
+```
+
+This dependency-free Node test executes the page's inline script with a small DOM and API double. It checks authenticated list loading, filename text rendering, delete and restore requests, list refresh, and disabled deletion while processing. It is not a real browser or network test.
 
 ## Focused scripted provider-selection Tool Calling contract test
 
@@ -94,7 +104,7 @@ This proves the application/framework callback contract with a scripted determin
 
 These ten tests cover all five read-only tool boundaries, fail-closed authorization context, a dependency exception returned as a typed/redacted tool result, and the SSE terminal protocol. The stream scenarios verify token(s) followed by exactly one `complete` event on success; a safe `MODEL_UNAVAILABLE` error before the first token; a safe `MODEL_TIMEOUT` error after partial output; and an `INPUT_REJECTED` event without provider invocation. Failure events contain correlation IDs where server-side diagnostics exist, never expose the injected connection string, API-key marker, path, or exception message, and never append `complete` after an error.
 
-`DeterministicVerticalSliceTest` separately verifies the controller wire format contains named `token` and `complete` SSE frames and no `error` frame on success. `AiMonitoringAspectTest` verifies that terminal stream errors and typed summary failures increment failure metrics without recording successful usage, while successful streams and summaries record usage estimates. The Web page now buffers partial network reads and requires a single terminal event, but there is no Playwright/browser, disconnect, cancellation, heartbeat, or reconnect test yet.
+`DeterministicVerticalSliceTest` separately verifies the controller wire format contains named `token` and `complete` SSE frames and no `error` frame on success. `AgentControllerStreamTest` verifies comment heartbeat mapping, termination, and downstream cancellation with Reactor subscriptions. `AiMonitoringAspectTest` verifies that terminal stream errors and typed summary failures increment failure metrics without recording successful usage, while successful streams and summaries record usage estimates. The Web page buffers partial network reads and requires a single terminal event; there is no Playwright/browser, proxy, reconnect, or load test yet.
 
 ## Focused API validation and OpenAPI contract tests
 

@@ -137,9 +137,12 @@
         </div>
     </div>
 
-    <div class="card shadow-sm">
-        <div class="card-header bg-white">
+    <div id="documentActionAlert" class="alert d-none" role="status"></div>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center">
             <h5 class="mb-0">分析結果一覧 (Analysis Results)</h5>
+            <button type="button" class="btn btn-sm btn-outline-primary" onclick="refreshDocuments()">刷新文档</button>
         </div>
         <div class="card-body p-0">
             <div class="table-responsive">
@@ -150,7 +153,8 @@
                         <th scope="col">ファイル名 (Filename)</th>
                         <th scope="col">ステータス (Status)</th>
                         <th scope="col" style="width: 50%;">AI 要約 (AI Summary)</th>
-                        <th scope="col">作成日 (Date)</th>
+                        <th scope="col">更新日 (Updated)</th>
+                        <th scope="col">操作</th>
                     </tr>
                     </thead>
                     <tbody id="documentsTableBody">
@@ -167,13 +171,33 @@
                                 AI generated summary will appear here...
                             </div>
                         </td>
-                        <td th:text="${#temporals.format(doc.createdAt, 'yyyy-MM-dd HH:mm')}">2026-01-20</td>
+                        <td th:text="${#temporals.format(doc.updatedAt, 'yyyy-MM-dd HH:mm')}">2026-01-20</td>
+                        <td><button type="button" class="btn btn-sm btn-outline-danger" data-document-action="delete"
+                                    th:attr="data-document-id=${doc.id}"
+                                    th:disabled="${doc.status.name() == 'processing'}">移至回收站</button></td>
                     </tr>
                     <tr th:if="${#lists.isEmpty(documents)}" id="noDocumentsRow">
-                        <td colspan="5" class="text-center py-4 text-muted">
+                        <td colspan="6" class="text-center py-4 text-muted">
                             まだドキュメントがありません (No documents found)
                         </td>
                     </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">回收站 (Recycle Bin)</h5>
+            <button type="button" class="btn btn-sm btn-outline-primary" onclick="refreshDeletedDocuments()">刷新回收站</button>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light"><tr><th>ID</th><th>ファイル名 (Filename)</th><th>操作</th></tr></thead>
+                    <tbody id="deletedDocumentsTableBody">
+                    <tr><td colspan="3" class="text-center py-4 text-muted">回收站为空</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -183,6 +207,160 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+    function showDocumentAction(message, isError = false) {
+        const alertBox = document.getElementById('documentActionAlert');
+        alertBox.textContent = message;
+        alertBox.className = 'alert ' + (isError ? 'alert-danger' : 'alert-success');
+    }
+
+    async function documentApi(url, options = {}) {
+        const token = localStorage.getItem('jwtToken');
+        if (!token) throw new Error('请先登录');
+        const response = await fetch(url, {
+            ...options,
+            headers: { ...options.headers, 'Authorization': 'Bearer ' + token }
+        });
+        if (response.status === 401 || response.status === 403) {
+            localStorage.removeItem('jwtToken');
+            window.location.reload();
+            throw new Error('登录已过期');
+        }
+        if (!response.ok) {
+            throw new Error(response.status === 409
+                ? '原文件不可用，无法恢复，请重新上传。'
+                : '请求失败 (HTTP ' + response.status + ')');
+        }
+        return response.json();
+    }
+
+    function documentCell(row, value) {
+        const cell = document.createElement('td');
+        cell.textContent = value == null ? '' : String(value);
+        row.appendChild(cell);
+        return cell;
+    }
+
+    function showEmptyDocumentRows(body, columns, message) {
+        const row = document.createElement('tr');
+        const cell = documentCell(row, message);
+        cell.colSpan = columns;
+        cell.className = 'text-center py-4 text-muted';
+        body.appendChild(row);
+    }
+
+    async function loadVisibleDocuments() {
+        const baseUrl = '/api/documents?size=100&sort=createdAt,desc&page=';
+        const first = (await documentApi(baseUrl + '0')).data;
+        const documents = [...first.content];
+        for (let page = 1; page < first.totalPages; page++) {
+            const next = (await documentApi(baseUrl + page)).data;
+            documents.push(...next.content);
+        }
+        return documents;
+    }
+
+    async function refreshDocuments() {
+        try {
+            const documents = await loadVisibleDocuments();
+            const body = document.getElementById('documentsTableBody');
+            body.replaceChildren();
+            if (documents.length === 0) {
+                showEmptyDocumentRows(body, 6, 'まだドキュメントがありません (No documents found)');
+                return;
+            }
+            for (const doc of documents) {
+                const row = document.createElement('tr');
+                row.dataset.docId = doc.id;
+                row.dataset.docStatus = doc.status || 'uploaded';
+                documentCell(row, doc.id);
+                documentCell(row, doc.fileName);
+                const statusCell = documentCell(row, '');
+                const badge = document.createElement('span');
+                badge.className = 'badge doc-status-badge ' +
+                    (doc.status === 'completed' ? 'text-bg-success' :
+                        doc.status === 'processing' ? 'text-bg-warning' : 'text-bg-danger');
+                badge.textContent = doc.status || 'uploaded';
+                statusCell.appendChild(badge);
+                const summaryCell = documentCell(row, '');
+                const summary = document.createElement('div');
+                summary.className = 'summary-box doc-summary-box';
+                summary.textContent = doc.summary || '';
+                summaryCell.appendChild(summary);
+                documentCell(row, doc.uploadTime ? new Date(doc.uploadTime).toLocaleString() : '');
+                const actionCell = documentCell(row, '');
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'btn btn-sm btn-outline-danger';
+                button.dataset.documentAction = 'delete';
+                button.dataset.documentId = doc.id;
+                button.textContent = '移至回收站';
+                button.disabled = doc.status === 'processing';
+                actionCell.appendChild(button);
+                body.appendChild(row);
+            }
+            checkProcessingDocuments();
+        } catch (error) {
+            showDocumentAction('文档列表加载失败：' + error.message, true);
+        }
+    }
+
+    async function refreshDeletedDocuments() {
+        try {
+            const response = await documentApi('/api/documents/deleted');
+            const body = document.getElementById('deletedDocumentsTableBody');
+            body.replaceChildren();
+            const documents = response.data || [];
+            if (documents.length === 0) {
+                showEmptyDocumentRows(body, 3, '回收站为空');
+                return;
+            }
+            for (const doc of documents) {
+                const row = document.createElement('tr');
+                documentCell(row, doc.id);
+                documentCell(row, doc.fileName);
+                const actionCell = documentCell(row, '');
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'btn btn-sm btn-outline-success';
+                button.dataset.documentAction = 'restore';
+                button.dataset.documentId = doc.id;
+                button.textContent = '恢复并重新分析';
+                actionCell.appendChild(button);
+                body.appendChild(row);
+            }
+        } catch (error) {
+            showDocumentAction('回收站加载失败：' + error.message, true);
+        }
+    }
+
+    async function handleDocumentAction(event) {
+        const button = event.target.closest('button[data-document-action]');
+        if (!button || button.disabled) return;
+        const id = Number(button.dataset.documentId);
+        if (!Number.isSafeInteger(id) || id <= 0) return;
+        const restoring = button.dataset.documentAction === 'restore';
+        if (!restoring && !window.confirm('确定将此文档移至回收站？')) return;
+        button.disabled = true;
+        try {
+            await documentApi('/api/documents/' + id + (restoring ? '/restore' : ''),
+                { method: restoring ? 'POST' : 'DELETE' });
+            showDocumentAction(restoring ? '文档已恢复，正在重新分析。' : '文档已移至回收站。');
+            await Promise.all([refreshDocuments(), refreshDeletedDocuments()]);
+        } catch (error) {
+            button.disabled = false;
+            showDocumentAction('操作失败：' + error.message, true);
+        }
+    }
+
+    document.getElementById('documentsTableBody').addEventListener('click', handleDocumentAction);
+    document.getElementById('deletedDocumentsTableBody').addEventListener('click', handleDocumentAction);
+    window.addEventListener('DOMContentLoaded', function() {
+        if (localStorage.getItem('jwtToken')) {
+            refreshDocuments();
+            refreshDeletedDocuments();
+        }
+    });
+
     // 1. 自动化轮询状态脚本 (Live Polling for Processing Documents)
     function checkProcessingDocuments() {
         const rows = document.querySelectorAll('tr[data-doc-status="processing"], tr[data-doc-status="PROCESSING"]');
@@ -219,6 +397,8 @@
                         if (summaryBox && data.summary) {
                             summaryBox.textContent = data.summary;
                         }
+                        const deleteButton = row.querySelector('button[data-document-action="delete"]');
+                        if (deleteButton) deleteButton.disabled = false;
                         // 当后台异步 AI 摘要处理完成时，调用阶梯刷新确保可观测性面板完全对齐
                         if (typeof scheduleUsageRefresh === 'function') {
                             scheduleUsageRefresh();
@@ -275,43 +455,22 @@
             .then(responseData => {
                 const doc = responseData.data;
                 if (alertArea) {
-                    alertArea.innerHTML = '<div class="alert alert-success alert-dismissible fade show" role="alert">' +
-                        '<i class="bi bi-check-circle-fill"></i> 文件 <strong>' + (doc.fileName || 'document') + '</strong> 已成功上传至服务端处理队列！后台 AI 引擎正在进行异步摘要生成与 RAG 向量切分，请直接在下方表格观察状态实时完成，无需任何页面跳转与刷新。' +
-                        '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>' +
-                        '</div>';
+                    const success = document.createElement('div');
+                    success.className = 'alert alert-success';
+                    success.textContent = '文件 ' + (doc.fileName || 'document') +
+                        ' 已成功上传，正在后台进行摘要与 RAG 索引。';
+                    alertArea.replaceChildren(success);
                 }
                 if (fileInput) fileInput.value = '';
-
-                const noDocRow = document.getElementById('noDocumentsRow');
-                if (noDocRow) noDocRow.remove();
-
-                const tbody = document.getElementById('documentsTableBody');
-                if (tbody) {
-                    const newRow = document.createElement('tr');
-                    newRow.setAttribute('data-doc-id', doc.id);
-                    newRow.setAttribute('data-doc-status', doc.status || 'processing');
-                    newRow.innerHTML = `
-                        <td>${doc.id}</td>
-                        <td>${doc.fileName || 'document'}</td>
-                        <td>
-                            <span class="badge doc-status-badge text-bg-warning">${doc.status || 'processing'}</span>
-                        </td>
-                        <td>
-                            <div class="summary-box doc-summary-box">正在后台进行 AI 摘要与 RAG 向量切分，请稍候...</div>
-                        </td>
-                        <td>刚刚</td>
-                    `;
-                    tbody.insertBefore(newRow, tbody.firstChild);
-                }
-
+                refreshDocuments();
                 setTimeout(checkProcessingDocuments, 1000);
             })
             .catch(err => {
                 if (alertArea) {
-                    alertArea.innerHTML = '<div class="alert alert-danger alert-dismissible fade show" role="alert">' +
-                        '<i class="bi bi-exclamation-triangle-fill"></i> 上传处理失败: ' + err.message +
-                        '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>' +
-                        '</div>';
+                    const failure = document.createElement('div');
+                    failure.className = 'alert alert-danger';
+                    failure.textContent = '上传处理失败: ' + err.message;
+                    alertArea.replaceChildren(failure);
                 }
             })
             .finally(() => {

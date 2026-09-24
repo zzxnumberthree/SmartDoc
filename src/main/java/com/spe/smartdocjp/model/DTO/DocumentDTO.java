@@ -20,13 +20,19 @@ public record DocumentDTO(
     @Size(max = 100, message = "タイトルは100文字以内で入力してください")
     String fileName,
 
-    LocalDateTime uploadTime
+    LocalDateTime uploadTime,
+
+    String status,
+
+    String summary
 ) {
     public static DocumentDTO from(Document d) {
         return new DocumentDTO(
             d.getId(),
             d.getOriginalFilename(),
-            d.getUpdatedAt()
+            d.getUpdatedAt(),
+            d.getStatus().name(),
+            d.getSummary()
         );
     }
 }
