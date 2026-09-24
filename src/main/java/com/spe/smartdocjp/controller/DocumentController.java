@@ -111,4 +111,12 @@ public class DocumentController {
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(ApiResponse.success(null, "已触发重新分析"));
     }
+
+    @Operation(summary = "恢复已删除文档", description = "恢复回收站中的文档并重新触发处理")
+    @PostMapping("/{id}/restore")
+    public ResponseEntity<ApiResponse<Void>> restoreDocument(@PathVariable("id") Long id) {
+        documentService.restoreDocument(id);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success(null, "文档已恢复，正在重新处理"));
+    }
 }

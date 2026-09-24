@@ -111,6 +111,17 @@ public class GlobalExceptionHandler {
         return problemDetail;
     }
 
+    @ExceptionHandler(DocumentSourceUnavailableException.class)
+    public ProblemDetail handleDocumentSourceUnavailable(DocumentSourceUnavailableException exc) {
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.CONFLICT,
+                "文档原文件不可用，无法恢复，请重新上传。"
+        );
+        problemDetail.setTitle("Document Source Unavailable");
+        problemDetail.setProperty("timestamp", Instant.now());
+        return problemDetail;
+    }
+
     @ExceptionHandler(AccessDeniedException.class)
     public ProblemDetail handleAccessDenied(AccessDeniedException exc) {
         log.warn("Access denied: {}", exc.getMessage());

@@ -1,6 +1,6 @@
 # SmartDoc-JP Project Context
 
-Last synchronized: 2026-09-18 (Asia/Tokyo)
+Last synchronized: 2026-09-24 (Asia/Tokyo)
 
 ## Purpose
 
@@ -33,6 +33,7 @@ Source code and reproducible tests are authoritative for implemented behavior. T
 | Summarization | Upload schedules automatic PDF/text summary generation; a typed internal result separates success/failure from fixed safe fallback text | Whole-input, free-form summary; no quality or long-context evaluation; protected server logs retain exception causes; legacy rows written by older versions require an explicit cleanup policy |
 | Async processing | After-commit scheduling through a Spring-managed task executor | Feature behavior is tested; saturation can still fall back to the request thread through `CallerRunsPolicy` |
 | RAG and Q&A | Owner-filtered local `SimpleVectorStore`, persisted chunks, cited answers | Local/demo-grade durability; deterministic model and H2 are used by default tests |
+| Recycle-bin restore | Owner or admin can restore a soft-deleted document with a retained source file; HTTP 202 schedules summary and RAG rebuild after commit | H2 integration tests verify scope, file checks, state change, and async scheduling; rebuild completion and MySQL behavior are not proven by this operation's tests |
 | Streaming | Named `token`, `complete`, and `error` SSE events, and transport SSE comment heartbeats; POST Web client with buffered parsing | Deterministic unit/contract tests verify event mapping, heartbeats, and timeout/cancellation cleanup; no browser, reconnect, or load proof |
 | Tool Calling | Five owner-scoped, read-only Spring AI `@Tool` functions with structured failure results | One deterministic provider-selected synchronous callback; no autonomous planner or multi-tool workflow proof |
 | API validation | Request validation failures return HTTP 400 RFC 7807 Problem Details with safe generic detail and structured field errors without rejected values | Audited controller validation paths only; does not prove application-wide error de-identification or full OpenAPI schema conformance |

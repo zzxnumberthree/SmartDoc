@@ -27,6 +27,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.UUID;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -225,6 +227,112 @@ class DocumentAuthorizationIntegrationTest {
     }
 
     @Test
+    void ownerCanRestoreDeletedDocumentAndScheduleReanalysisOnce() throws Exception {
+        Authentication owner = createAuthentication("restore-owner", User.Role.USER);
+        Document document = saveDocument(
+                ((CustomUserDetails) owner.getPrincipal()).getUser(), "RESTORE_OWNER", "old summary");
+        Path source = createStoredSource(document);
+        try {
+            mockMvc.perform(post("/api/documents/{id}/restore", document.getId())
+                            .with(authentication(owner)))
+                    .andExpect(status().isNotFound());
+            jdbcTemplate.update("UPDATE documents SET is_deleted = true WHERE id = ?", document.getId());
+
+            mockMvc.perform(post("/api/documents/{id}/restore", document.getId())
+                            .with(authentication(owner)))
+                    .andExpect(status().isAccepted());
+
+            assertFalse(jdbcTemplate.queryForObject(
+                    "SELECT is_deleted FROM documents WHERE id = ?", Boolean.class, document.getId()));
+            assertEquals("processing", jdbcTemplate.queryForObject(
+                    "SELECT status FROM documents WHERE id = ?", String.class, document.getId()));
+            assertEquals("processing", jdbcTemplate.queryForObject(
+                    "SELECT embedding_status FROM documents WHERE id = ?", String.class, document.getId()));
+            assertEquals(0, jdbcTemplate.queryForObject(
+                    "SELECT chunk_count FROM documents WHERE id = ?", Integer.class, document.getId()));
+            assertTrue(mockMvc.perform(get("/api/documents/{id}", document.getId())
+                            .with(authentication(owner)))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString().contains(document.getOriginalFilename()));
+            verify(documentAsyncService, times(1)).processAiAndRagAsync(document.getId(), source.toRealPath());
+
+            mockMvc.perform(post("/api/documents/{id}/restore", document.getId())
+                            .with(authentication(owner)))
+                    .andExpect(status().isNotFound());
+            verify(documentAsyncService, times(1)).processAiAndRagAsync(document.getId(), source.toRealPath());
+        } finally {
+            Files.deleteIfExists(source);
+        }
+    }
+
+    @Test
+    void onlyAdminCanRestoreAnotherUsersDeletedDocument() throws Exception {
+        Authentication owner = createAuthentication("restore-admin-owner", User.Role.USER);
+        Authentication foreignUser = createAuthentication("restore-foreign", User.Role.USER);
+        Authentication admin = createAuthentication("restore-admin", User.Role.ADMIN);
+        Document document = saveDocument(
+                ((CustomUserDetails) owner.getPrincipal()).getUser(), "RESTORE_ADMIN", "old summary");
+        Path source = createStoredSource(document);
+        try {
+            jdbcTemplate.update("UPDATE documents SET is_deleted = true WHERE id = ?", document.getId());
+            long unknownId = document.getId() + 1_000_000;
+
+            mockMvc.perform(post("/api/documents/{id}/restore", document.getId())
+                            .with(authentication(foreignUser)))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.detail").value("文档未找到"));
+            mockMvc.perform(post("/api/documents/{id}/restore", unknownId)
+                            .with(authentication(admin)))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.detail").value("文档未找到"));
+            verify(documentAsyncService, never()).processAiAndRagAsync(
+                    org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any());
+
+            mockMvc.perform(post("/api/documents/{id}/restore", document.getId())
+                            .with(authentication(admin)))
+                    .andExpect(status().isAccepted());
+            verify(documentAsyncService, times(1)).processAiAndRagAsync(document.getId(), source.toRealPath());
+        } finally {
+            Files.deleteIfExists(source);
+        }
+    }
+
+    @Test
+    void missingOrEscapingSourceCannotBeRestored() throws Exception {
+        Authentication owner = createAuthentication("restore-invalid", User.Role.USER);
+        User user = ((CustomUserDetails) owner.getPrincipal()).getUser();
+        Document missing = saveDocument(user, "RESTORE_MISSING_" + UUID.randomUUID(), "old summary");
+        jdbcTemplate.update("UPDATE documents SET is_deleted = true WHERE id = ?", missing.getId());
+
+        mockMvc.perform(post("/api/documents/{id}/restore", missing.getId())
+                        .with(authentication(owner)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("文档原文件不可用，无法恢复，请重新上传。"));
+        assertTrue(jdbcTemplate.queryForObject(
+                "SELECT is_deleted FROM documents WHERE id = ?", Boolean.class, missing.getId()));
+
+        Document escaping = saveDocument(user, "RESTORE_ESCAPE", "old summary");
+        escaping.setStoragePath("../restore-outside.txt");
+        documentRepository.saveAndFlush(escaping);
+        jdbcTemplate.update("UPDATE documents SET is_deleted = true WHERE id = ?", escaping.getId());
+        Path outside = Path.of("target/deterministic-test/restore-outside.txt").toAbsolutePath();
+        Files.createDirectories(outside.getParent());
+        Files.writeString(outside, "outside");
+        try {
+            mockMvc.perform(post("/api/documents/{id}/restore", escaping.getId())
+                            .with(authentication(owner)))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.detail").value("文档原文件不可用，无法恢复，请重新上传。"));
+            assertTrue(jdbcTemplate.queryForObject(
+                    "SELECT is_deleted FROM documents WHERE id = ?", Boolean.class, escaping.getId()));
+            verify(documentAsyncService, never()).processAiAndRagAsync(
+                    org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any());
+        } finally {
+            Files.deleteIfExists(outside);
+        }
+    }
+
+    @Test
     void ownersAndAdminsCanMutateDocumentsWhileEveryUnknownOperationReturns404() throws Exception {
         Authentication owner = createAuthentication("mutation-owner", User.Role.USER);
         Authentication admin = createAuthentication("mutation-admin", User.Role.ADMIN);
@@ -363,5 +471,13 @@ class DocumentAuthorizationIntegrationTest {
                 .chunkCount(0)
                 .isDeleted(false)
                 .build());
+    }
+
+    private Path createStoredSource(Document document) throws Exception {
+        Path source = Path.of("target/deterministic-test/uploads")
+                .resolve(document.getStoragePath()).toAbsolutePath();
+        Files.createDirectories(source.getParent());
+        Files.writeString(source, "restore fixture");
+        return source;
     }
 }

@@ -1,6 +1,7 @@
 package com.spe.smartdocjp.service;
 
 import com.spe.smartdocjp.exception.DocumentNotFoundException;
+import com.spe.smartdocjp.exception.DocumentSourceUnavailableException;
 import com.spe.smartdocjp.model.DTO.DocumentDTO;
 import com.spe.smartdocjp.model.DTO.DocumentStatusDTO;
 import com.spe.smartdocjp.model.entity.Document;
@@ -18,10 +19,13 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
@@ -48,6 +52,7 @@ public class DocumentService {
     // 获取文件存放的根目录，转成绝对路径，清除多余..防止路径注入，适配不同平台
 
     private static final String INVALID_FILENAME_MESSAGE = "不支持的文件名或文件格式 (Invalid or unsupported file name)";
+    private static final String RESTORING_SUMMARY = "正在重新进行 AI 摘要与 RAG 向量化处理...";
 
     /**
      Uploads a file, stores it on disk, analyzes it with AI, and saves the record.
@@ -227,6 +232,52 @@ public class DocumentService {
             ragService.deleteDocumentChunksAndVectors(id);
         } catch (Exception e) {
             log.warn("清理 RAG 向量和分块数据异常 (documentId={}): {}", id, e.getMessage(), e);
+        }
+    }
+
+    /** Restores a recycle-bin entry and rebuilds its summary and RAG index after commit. */
+    @Transactional
+    public void restoreDocument(Long id) {
+        Long userId = SecurityUtils.requireCurrentUserId();
+        boolean admin = SecurityUtils.isCurrentUserAdmin();
+        Document deleted = (admin
+                ? documentRepository.findDeletedById(id)
+                : documentRepository.findDeletedByIdAndUserId(id, userId))
+                .orElseThrow(DocumentNotFoundException::new);
+
+        Path source = requireRestoreSource(deleted.getStoragePath());
+        int updated = admin
+                ? documentRepository.restoreDeletedById(id, RESTORING_SUMMARY)
+                : documentRepository.restoreDeletedByIdAndUserId(id, userId, RESTORING_SUMMARY);
+        if (updated != 1) {
+            throw new DocumentNotFoundException();
+        }
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                documentAsyncService.processAiAndRagAsync(id, source);
+            }
+        });
+    }
+
+    private Path requireRestoreSource(String storedPath) {
+        if (storedPath == null || storedPath.isBlank()) {
+            throw new DocumentSourceUnavailableException();
+        }
+        try {
+            Path root = getFileStorageLocation();
+            Path source = root.resolve(storedPath).normalize();
+            if (!source.startsWith(root) || !Files.isRegularFile(source)) {
+                throw new DocumentSourceUnavailableException();
+            }
+            Path realSource = source.toRealPath();
+            if (!realSource.startsWith(root.toRealPath())) {
+                throw new DocumentSourceUnavailableException();
+            }
+            return realSource;
+        } catch (IOException | InvalidPathException | SecurityException e) {
+            throw new DocumentSourceUnavailableException();
         }
     }
 

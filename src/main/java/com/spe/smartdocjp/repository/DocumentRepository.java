@@ -4,6 +4,7 @@ import com.spe.smartdocjp.model.entity.Document;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -34,4 +35,22 @@ public interface DocumentRepository extends JpaRepository<Document, Long>{
     @Query(value = "SELECT * FROM documents WHERE is_deleted = true AND user_id = :userId ORDER BY created_at DESC", nativeQuery = true)
     List<Document> findDeletedDocumentsByUserId(@Param("userId") Long userId);
 
+    @Query(value = "SELECT * FROM documents WHERE is_deleted = true AND id = :id", nativeQuery = true)
+    Optional<Document> findDeletedById(@Param("id") Long id);
+
+    @Query(value = "SELECT * FROM documents WHERE is_deleted = true AND id = :id AND user_id = :userId", nativeQuery = true)
+    Optional<Document> findDeletedByIdAndUserId(@Param("id") Long id, @Param("userId") Long userId);
+
+    @Modifying
+    @Query(value = "UPDATE documents SET is_deleted = false, status = 'processing', "
+            + "embedding_status = 'processing', summary = :summary, chunk_count = 0, "
+            + "updated_at = CURRENT_TIMESTAMP WHERE id = :id AND is_deleted = true", nativeQuery = true)
+    int restoreDeletedById(@Param("id") Long id, @Param("summary") String summary);
+
+    @Modifying
+    @Query(value = "UPDATE documents SET is_deleted = false, status = 'processing', "
+            + "embedding_status = 'processing', summary = :summary, chunk_count = 0, "
+            + "updated_at = CURRENT_TIMESTAMP WHERE id = :id AND user_id = :userId "
+            + "AND is_deleted = true", nativeQuery = true)
+    int restoreDeletedByIdAndUserId(@Param("id") Long id, @Param("userId") Long userId, @Param("summary") String summary);
 }
