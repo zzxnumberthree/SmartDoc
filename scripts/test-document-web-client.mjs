@@ -33,6 +33,10 @@ class Element {
         this.children = children;
     }
     addEventListener() {}
+    click() {
+        if (this.tagName === 'a') downloaded = { href: this.href, filename: this.download };
+    }
+    remove() {}
 }
 
 const elements = Object.fromEntries(
@@ -42,6 +46,7 @@ const elements = Object.fromEntries(
 let active = [{ id: 7, fileName: '<img src=x onerror=alert(1)>.txt',
     status: 'completed', summary: 'Ready', uploadTime: '2026-09-24T10:00:00' }];
 let deleted = [];
+let downloaded = null;
 const calls = [];
 const fetch = async (url, options = {}) => {
     calls.push({ url, options });
@@ -53,6 +58,9 @@ const fetch = async (url, options = {}) => {
     }
     if (url === '/api/documents/deleted') {
         return { ok: true, status: 200, json: async () => ({ data: deleted }) };
+    }
+    if (url === '/api/documents/7/download') {
+        return { ok: true, status: 200, blob: async () => new Uint8Array([1, 2, 3]) };
     }
     if (url === '/api/documents/7' && options.method === 'DELETE') {
         deleted = active;
@@ -74,6 +82,7 @@ const fetch = async (url, options = {}) => {
 
 const context = vm.createContext({
     document: {
+        body: new Element('body'),
         getElementById: id => elements[id] ?? null,
         createElement: tagName => new Element(tagName),
         querySelectorAll: () => [],
@@ -82,6 +91,7 @@ const context = vm.createContext({
     window: { addEventListener() {}, confirm: () => true, location: { reload() {} } },
     localStorage: { getItem: () => 'fixture-token', removeItem() {} },
     fetch,
+    URL: { createObjectURL: () => 'blob:document-fixture', revokeObjectURL() {} },
     setInterval() {},
     setTimeout() {},
     console
@@ -93,7 +103,15 @@ await context.refreshDeletedDocuments();
 assert.equal(elements.documentsTableBody.children.length, 1);
 assert.equal(elements.documentsTableBody.children[0].children[1].textContent,
     '<img src=x onerror=alert(1)>.txt');
-const deleteButton = elements.documentsTableBody.children[0].children[5].children[0];
+const downloadButton = elements.documentsTableBody.children[0].children[5].children[0];
+assert.equal(downloadButton.dataset.documentAction, 'download');
+await context.handleDocumentAction({ target: { closest: () => downloadButton } });
+assert.equal(calls.find(call => call.url === '/api/documents/7/download')?.options.headers.Authorization,
+    'Bearer fixture-token');
+assert.deepEqual(downloaded, {
+    href: 'blob:document-fixture', filename: '<img src=x onerror=alert(1)>.txt'
+});
+const deleteButton = elements.documentsTableBody.children[0].children[5].children[1];
 assert.equal(deleteButton.dataset.documentAction, 'delete');
 await context.handleDocumentAction({ target: { closest: () => deleteButton } });
 assert.equal(elements.deletedDocumentsTableBody.children.length, 1);
@@ -105,7 +123,7 @@ await context.handleDocumentAction({ target: { closest: () => restoreButton } })
 assert.equal(calls.find(call => call.options.method === 'POST')?.url, '/api/documents/7/restore');
 assert.equal(elements.deletedDocumentsTableBody.children[0].textContent, '回收站为空');
 assert.equal(elements.documentsTableBody.children[0].dataset.docStatus, 'processing');
-assert.equal(elements.documentsTableBody.children[0].children[5].children[0].disabled, true);
+assert.equal(elements.documentsTableBody.children[0].children[5].children[1].disabled, true);
 const restoredRow = elements.documentsTableBody.children[0];
 restoredRow.getAttribute = name => name === 'data-doc-id' ? '7' : null;
 restoredRow.setAttribute = (name, value) => {
@@ -114,7 +132,7 @@ restoredRow.setAttribute = (name, value) => {
 restoredRow.querySelector = selector => {
     if (selector === '.doc-status-badge') return restoredRow.children[2].children[0];
     if (selector === '.doc-summary-box') return restoredRow.children[3].children[0];
-    if (selector === 'button[data-document-action="delete"]') return restoredRow.children[5].children[0];
+    if (selector === 'button[data-document-action="delete"]') return restoredRow.children[5].children[1];
     return null;
 };
 context.document.querySelectorAll = () => [restoredRow];
@@ -122,5 +140,5 @@ context.checkProcessingDocuments();
 await new Promise(resolve => setImmediate(resolve));
 assert.equal(restoredRow.dataset.docStatus, 'completed');
 assert.equal(restoredRow.children[3].children[0].textContent, 'Rebuilt summary');
-assert.equal(restoredRow.children[5].children[0].disabled, false);
-console.log('Document web client delete/restore flow passed');
+assert.equal(restoredRow.children[5].children[1].disabled, false);
+console.log('Document web client download/delete/restore flow passed');

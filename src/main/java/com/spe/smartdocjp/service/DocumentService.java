@@ -40,6 +40,8 @@ import com.spe.smartdocjp.service.parser.DocumentParser;
 @Slf4j
 public class DocumentService {
 
+    public record DocumentDownload(Resource resource, String originalFilename) {}
+
     private final DocumentRepository documentRepository;
     private final UserRepository userRepository;
     private final AiAnalysisService aiAnalysisService;
@@ -184,6 +186,13 @@ public class DocumentService {
         return DocumentDTO.from(requireAccessibleDocument(id));
     }
 
+    /** Returns the stored original file for an active document visible to the current user. */
+    public DocumentDownload getDocumentDownload(Long id) {
+        Document document = requireAccessibleDocument(id);
+        Path source = requireDownloadSource(document.getStoragePath());
+        return new DocumentDownload(new FileSystemResource(source), document.getOriginalFilename());
+    }
+
     @Transactional
     public DocumentDTO updateDocumentMetadata(Long id, UpdateDocRequest request) {
         Document doc = requireAccessibleDocument(id);
@@ -278,6 +287,27 @@ public class DocumentService {
             return realSource;
         } catch (IOException | InvalidPathException | SecurityException e) {
             throw new DocumentSourceUnavailableException();
+        }
+    }
+
+    private Path requireDownloadSource(String storedPath) {
+        if (storedPath == null || storedPath.isBlank()) {
+            throw new DocumentNotFoundException();
+        }
+        try {
+            Path root = getFileStorageLocation();
+            Path source = root.resolve(storedPath).normalize();
+            if (!source.startsWith(root) || !Files.isRegularFile(source)) {
+                throw new DocumentNotFoundException();
+            }
+            Path realRoot = root.toRealPath();
+            Path realSource = source.toRealPath();
+            if (!realSource.startsWith(realRoot) || !Files.isRegularFile(realSource)) {
+                throw new DocumentNotFoundException();
+            }
+            return realSource;
+        } catch (IOException | InvalidPathException | SecurityException e) {
+            throw new DocumentNotFoundException();
         }
     }
 

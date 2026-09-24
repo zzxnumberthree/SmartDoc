@@ -11,14 +11,19 @@ import com.spe.smartdocjp.service.DocumentService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.Resource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 /**
@@ -96,6 +101,20 @@ public class DocumentController {
         return ResponseEntity.ok(ApiResponse.success(documentService.getDocumentById(id)));
     }
 
+    @Operation(summary = "下载原始文档", description = "下载当前用户或管理员可访问的活动文档原文件")
+    @GetMapping("/{id}/download")
+    public ResponseEntity<Resource> downloadDocument(@PathVariable("id") Long id) {
+        DocumentService.DocumentDownload download = documentService.getDocumentDownload(id);
+        String filename = safeDownloadFilename(download.originalFilename());
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(filename, StandardCharsets.UTF_8)
+                        .build()
+                        .toString())
+                .body(download.resource());
+    }
+
     @Operation(summary = "更新文档元数据", description = "根据 ID 更新文档标题等元数据")
     @PatchMapping("/{id}")
     public ResponseEntity<ApiResponse<DocumentDTO>> updateDocumentMetadata(
@@ -118,5 +137,20 @@ public class DocumentController {
         documentService.restoreDocument(id);
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(ApiResponse.success(null, "文档已恢复，正在重新处理"));
+    }
+
+    private String safeDownloadFilename(String originalFilename) {
+        if (originalFilename == null || originalFilename.isBlank()) {
+            return "document";
+        }
+        StringBuilder safe = new StringBuilder(originalFilename.length());
+        originalFilename.codePoints().forEach(codePoint -> {
+            if (Character.isISOControl(codePoint) || codePoint == '/' || codePoint == '\\') {
+                safe.append('_');
+            } else {
+                safe.appendCodePoint(codePoint);
+            }
+        });
+        return safe.toString().isBlank() ? "document" : safe.toString();
     }
 }

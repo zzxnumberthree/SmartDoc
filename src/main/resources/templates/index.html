@@ -172,7 +172,9 @@
                             </div>
                         </td>
                         <td th:text="${#temporals.format(doc.updatedAt, 'yyyy-MM-dd HH:mm')}">2026-01-20</td>
-                        <td><button type="button" class="btn btn-sm btn-outline-danger" data-document-action="delete"
+                        <td><button type="button" class="btn btn-sm btn-outline-primary me-1" data-document-action="download"
+                                    th:attr="data-document-id=${doc.id},data-document-name=${doc.originalFilename}">下载原文件</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" data-document-action="delete"
                                     th:attr="data-document-id=${doc.id}"
                                     th:disabled="${doc.status.name() == 'processing'}">移至回收站</button></td>
                     </tr>
@@ -288,6 +290,14 @@
                 summaryCell.appendChild(summary);
                 documentCell(row, doc.uploadTime ? new Date(doc.uploadTime).toLocaleString() : '');
                 const actionCell = documentCell(row, '');
+                const downloadButton = document.createElement('button');
+                downloadButton.type = 'button';
+                downloadButton.className = 'btn btn-sm btn-outline-primary me-1';
+                downloadButton.dataset.documentAction = 'download';
+                downloadButton.dataset.documentId = doc.id;
+                downloadButton.dataset.documentName = doc.fileName || '';
+                downloadButton.textContent = '下载原文件';
+                actionCell.appendChild(downloadButton);
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'btn btn-sm btn-outline-danger';
@@ -338,6 +348,36 @@
         if (!button || button.disabled) return;
         const id = Number(button.dataset.documentId);
         if (!Number.isSafeInteger(id) || id <= 0) return;
+        if (button.dataset.documentAction === 'download') {
+            button.disabled = true;
+            try {
+                const token = localStorage.getItem('jwtToken');
+                if (!token) throw new Error('请先登录');
+                const response = await fetch('/api/documents/' + id + '/download', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (response.status === 401 || response.status === 403) {
+                    localStorage.removeItem('jwtToken');
+                    window.location.reload();
+                    throw new Error('登录已过期');
+                }
+                if (!response.ok) throw new Error('文件不可用 (HTTP ' + response.status + ')');
+                const blobUrl = URL.createObjectURL(await response.blob());
+                const link = document.createElement('a');
+                link.href = blobUrl;
+                link.download = button.dataset.documentName || 'document-' + id;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+                showDocumentAction('已开始下载原文件。');
+            } catch (error) {
+                showDocumentAction('下载失败：' + error.message, true);
+            } finally {
+                button.disabled = false;
+            }
+            return;
+        }
         const restoring = button.dataset.documentAction === 'restore';
         if (!restoring && !window.confirm('确定将此文档移至回收站？')) return;
         button.disabled = true;

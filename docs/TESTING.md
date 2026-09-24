@@ -4,7 +4,7 @@ The default application test workflow is deterministic and does not require a lo
 
 ## Current evidence snapshot
 
-On 2026-09-24, after the document restore API and Web client changes, this Windows host ran `clean verify` with Java 21.0.1: **84 tests passed, 0 failed, 0 errors, 0 skipped** across 18 Surefire XML reports. The generated JaCoCo report measured **75.10% line coverage** and **44.37% branch coverage**. `node scripts/test-document-web-client.mjs` also passed using Node 24.15.0. These are deterministic local results, not MySQL, live Gemini, or browser proof.
+On 2026-09-24, after the document restore, Web client, and original-download changes, this Windows host ran `clean verify` with Java 21.0.1: **86 tests passed, 0 failed, 0 errors, 0 skipped** across 18 Surefire XML reports. The generated JaCoCo report measured **75.22% line coverage** and **44.81% branch coverage**. `node scripts/test-document-web-client.mjs` also passed using Node 24.15.0. These are deterministic local results, not MySQL, live Gemini, or browser proof.
 
 On 2026-09-18, after implementing the structured API validation contract and aligning the registration OpenAPI description, the Windows host ran `clean verify` with Maven 3.9.12, Java 21.0.1, and JaCoCo 0.8.15: **61 tests passed, 0 failed, 0 errors, 0 skipped** across 17 default test classes (17 Surefire XML reports). The report measured **72.99% line coverage** and **38.59% branch coverage**. See `docs/demo-results/2026-09-18-api-contract-coverage.md` for the report-level counters and scope (earlier snapshots are retained in `docs/demo-results/2026-09-18-windows-coverage.md` and `docs/demo-results/2026-09-16-windows-coverage.md`).
 
@@ -76,7 +76,7 @@ This Spring context test calls the proxied `AiAnalysisService`, injects two pars
 .\mvnw.cmd -Dtest=DocumentAuthorizationIntegrationTest test
 ```
 
-This nine-scenario H2/MockMvc suite uses real repositories and `CustomUserDetails` principals for ordinary users plus an administrator. It verifies that foreign and unknown document IDs return the same 404 contract; status/detail/update/re-analysis/delete reject cross-user access without changing state; owners and administrators can perform the permitted mutations; every unknown single-document operation returns 404; active and deleted lists are owner-scoped while administrators can view all; the anonymous home page contains no document data; both upload endpoints derive ownership only from authentication even when a spoofed `userId` parameter is supplied; the REST upload acknowledgement excludes user credentials and storage fields; and protected RAG endpoints fail closed when an authenticated principal cannot be mapped to an application user. Restore scenarios verify owner/admin scope, safe 404/409 responses, source-path checks, processing state, and exactly one scheduled async rebuild. `DocumentAsyncService` is mocked in this suite to prevent unrelated background AI work; authorization, controllers, services, security filters, and persistence remain real.
+This eleven-scenario H2/MockMvc suite uses real repositories and `CustomUserDetails` principals for ordinary users plus an administrator. It verifies that foreign and unknown document IDs return the same 404 contract; status/detail/update/re-analysis/delete reject cross-user access without changing state; owners and administrators can perform the permitted mutations; every unknown single-document operation returns 404; active and deleted lists are owner-scoped while administrators can view all; the anonymous home page contains no document data; both upload endpoints derive ownership only from authentication even when a spoofed `userId` parameter is supplied; the REST upload acknowledgement excludes user credentials and storage fields; and protected RAG endpoints fail closed when an authenticated principal cannot be mapped to an application user. Restore scenarios verify owner/admin scope, safe 404/409 responses, source-path checks, processing state, and exactly one scheduled async rebuild. Download scenarios verify owner/admin byte-for-byte attachment responses and safe 404 responses for unauthorized, deleted, missing, or escaping sources. `DocumentAsyncService` is mocked in this suite to prevent unrelated background AI work; authorization, controllers, services, security filters, and persistence remain real.
 
 ## Scripted document Web client flow
 
@@ -84,7 +84,7 @@ This nine-scenario H2/MockMvc suite uses real repositories and `CustomUserDetail
 node scripts/test-document-web-client.mjs
 ```
 
-This dependency-free Node test executes the page's inline script with a small DOM and API double. It checks authenticated list loading, filename text rendering, delete and restore requests, list refresh, and disabled deletion while processing. It is not a real browser or network test.
+This dependency-free Node test executes the page's inline script with a small DOM and API double. It checks authenticated list loading, filename text rendering, original-file download, delete and restore requests, list refresh, and disabled deletion while processing. It is not a real browser or network test.
 
 ## Focused scripted provider-selection Tool Calling contract test
 

@@ -19,6 +19,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -27,9 +28,11 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.UUID;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -302,6 +305,87 @@ class DocumentAuthorizationIntegrationTest {
             verify(documentAsyncService, times(1)).processAiAndRagAsync(document.getId(), source.toRealPath());
         } finally {
             Files.deleteIfExists(source);
+        }
+    }
+
+    @Test
+    void originalDownloadStreamsBytesWithSafeHeadersForOwnerAndAdmin() throws Exception {
+        Authentication owner = createAuthentication("download-owner", User.Role.USER);
+        Authentication otherUser = createAuthentication("download-other", User.Role.USER);
+        Authentication admin = createAuthentication("download-admin", User.Role.ADMIN);
+        Document document = saveDocument(
+                ((CustomUserDetails) owner.getPrincipal()).getUser(), "DOWNLOAD_" + UUID.randomUUID(), "summary");
+        String originalFilename = "原文 \"report\".txt";
+        document.setOriginalFilename(originalFilename);
+        document.setStoragePath("test-only/" + UUID.randomUUID() + ".txt");
+        documentRepository.saveAndFlush(document);
+        byte[] originalBytes = new byte[]{0, 1, 2, 13, 10, (byte) 0xff, 42};
+        Path source = Path.of("target/deterministic-test/uploads")
+                .resolve(document.getStoragePath()).toAbsolutePath();
+        Files.createDirectories(source.getParent());
+        Files.write(source, originalBytes);
+
+        try {
+            for (Authentication authorized : java.util.List.of(owner, admin)) {
+                var response = mockMvc.perform(get("/api/documents/{id}/download", document.getId())
+                                .with(authentication(authorized)))
+                        .andExpect(status().isOk())
+                        .andReturn().getResponse();
+                assertArrayEquals(originalBytes, response.getContentAsByteArray());
+                assertEquals("application/octet-stream", response.getContentType());
+                String disposition = response.getHeader(HttpHeaders.CONTENT_DISPOSITION);
+                assertTrue(disposition.startsWith("attachment;"));
+                assertTrue(disposition.contains("filename*="));
+                assertFalse(disposition.contains("target/deterministic-test"));
+                assertFalse(disposition.contains("\r") || disposition.contains("\n"));
+            }
+
+            long unknownId = document.getId() + 1_000_000;
+            mockMvc.perform(get("/api/documents/{id}/download", document.getId())
+                            .with(authentication(otherUser)))
+                    .andExpect(status().isNotFound());
+            mockMvc.perform(get("/api/documents/{id}/download", unknownId)
+                            .with(authentication(admin)))
+                    .andExpect(status().isNotFound());
+
+            jdbcTemplate.update("UPDATE documents SET is_deleted = true WHERE id = ?", document.getId());
+            mockMvc.perform(get("/api/documents/{id}/download", document.getId())
+                            .with(authentication(owner)))
+                    .andExpect(status().isNotFound());
+        } finally {
+            Files.deleteIfExists(source);
+        }
+    }
+
+    @Test
+    void missingOrEscapingOriginalDownloadSourceReturnsIndistinguishable404() throws Exception {
+        Authentication owner = createAuthentication("download-invalid", User.Role.USER);
+        User user = ((CustomUserDetails) owner.getPrincipal()).getUser();
+        Document missing = saveDocument(user, "DOWNLOAD_MISSING_" + UUID.randomUUID(), "summary");
+        Document escaping = saveDocument(user, "DOWNLOAD_ESCAPE_" + UUID.randomUUID(), "summary");
+        escaping.setStoragePath("../download-outside-" + UUID.randomUUID() + ".txt");
+        documentRepository.saveAndFlush(escaping);
+        Path outside = Path.of("target/deterministic-test/uploads")
+                .resolve(escaping.getStoragePath()).normalize().toAbsolutePath();
+        Files.createDirectories(outside.getParent());
+        Files.writeString(outside, "outside", StandardCharsets.UTF_8);
+        try {
+            String missingResponse = mockMvc.perform(get("/api/documents/{id}/download", missing.getId())
+                            .with(authentication(owner)))
+                    .andExpect(status().isNotFound())
+                    .andReturn().getResponse().getContentAsString();
+            String escapingResponse = mockMvc.perform(get("/api/documents/{id}/download", escaping.getId())
+                            .with(authentication(owner)))
+                    .andExpect(status().isNotFound())
+                    .andReturn().getResponse().getContentAsString();
+            JsonNode missingProblem = objectMapper.readTree(missingResponse);
+            JsonNode escapingProblem = objectMapper.readTree(escapingResponse);
+            assertEquals(missingProblem.path("status").asInt(), escapingProblem.path("status").asInt());
+            assertEquals(missingProblem.path("title").asText(), escapingProblem.path("title").asText());
+            assertEquals(missingProblem.path("detail").asText(), escapingProblem.path("detail").asText());
+            assertFalse(missingResponse.contains("target/deterministic-test"));
+        } finally {
+            Files.deleteIfExists(outside);
         }
     }
 
