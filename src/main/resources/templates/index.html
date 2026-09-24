@@ -137,6 +137,40 @@
         </div>
     </div>
 
+    <div class="card shadow-sm mb-4 border-primary" id="ragSearchPanel">
+        <div class="card-header bg-primary text-white">
+            <h5 class="mb-0"><i class="bi bi-search"></i> 文档检索与出处问答 (RAG Search)</h5>
+        </div>
+        <div class="card-body">
+            <label for="ragQuestionInput" class="form-label">检索内容或问题</label>
+            <textarea id="ragQuestionInput" class="form-control mb-3" rows="3" placeholder="输入要检索的内容或问题"></textarea>
+            <div class="row g-3 align-items-end mb-3">
+                <div class="col-sm-3 col-md-2">
+                    <label for="ragTopKInput" class="form-label">结果数量 (1–10)</label>
+                    <input id="ragTopKInput" class="form-control" type="number" min="1" max="10" step="1" value="5">
+                </div>
+                <div class="col-sm-4 col-md-3">
+                    <label for="ragThresholdInput" class="form-label">相似度阈值 (0–1，仅检索)</label>
+                    <input id="ragThresholdInput" class="form-control" type="number" min="0" max="1" step="0.01" value="0.3">
+                </div>
+                <div class="col-sm-5 col-md-7 d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-outline-primary" id="ragSearchButton">检索片段</button>
+                    <button type="button" class="btn btn-primary" id="ragAskButton">带出处回答</button>
+                </div>
+            </div>
+            <div id="ragStatus" class="alert alert-secondary mb-3" role="status" aria-live="polite">输入内容后选择检索或带出处回答。</div>
+            <section id="ragAnswerSection" class="mb-3 d-none" aria-label="回答">
+                <h6>回答</h6>
+                <div id="ragAnswer" class="summary-box bg-white border rounded"></div>
+            </section>
+            <section id="ragSourcesSection" class="d-none" aria-label="来源片段">
+                <h6>来源片段</h6>
+                <div id="ragSources" class="d-grid gap-2"></div>
+                <small class="text-muted d-block mt-2">展示检索返回的来源信息；出处与回答内容的准确性未在此处验证。</small>
+            </section>
+        </div>
+    </div>
+
     <div id="documentActionAlert" class="alert d-none" role="status"></div>
 
     <div class="card shadow-sm mb-4">
@@ -742,6 +776,132 @@
             fetchAiUsageSummary();
         }
     });
+</script>
+<script id="ragWebClient">
+    (function() {
+        const questionInput = document.getElementById('ragQuestionInput');
+        const topKInput = document.getElementById('ragTopKInput');
+        const thresholdInput = document.getElementById('ragThresholdInput');
+        const searchButton = document.getElementById('ragSearchButton');
+        const askButton = document.getElementById('ragAskButton');
+        const statusBox = document.getElementById('ragStatus');
+        const answerSection = document.getElementById('ragAnswerSection');
+        const answerBox = document.getElementById('ragAnswer');
+        const sourcesSection = document.getElementById('ragSourcesSection');
+        const sourcesBox = document.getElementById('ragSources');
+        let requestId = 0;
+
+        function setStatus(message, kind) {
+            statusBox.textContent = message;
+            statusBox.className = 'alert mb-3 ' + (kind === 'error' ? 'alert-danger' :
+                kind === 'loading' ? 'alert-info' : kind === 'success' ? 'alert-success' : 'alert-secondary');
+        }
+
+        function clearResults() {
+            answerBox.textContent = '';
+            answerSection.classList.add('d-none');
+            sourcesBox.replaceChildren();
+            sourcesSection.classList.add('d-none');
+        }
+
+        function appendSource(source) {
+            const card = document.createElement('article');
+            card.className = 'p-3 bg-white border rounded';
+            const heading = document.createElement('div');
+            heading.className = 'fw-semibold mb-2';
+            const title = source && source.documentTitle != null ? String(source.documentTitle) : '未提供文件名';
+            const chunk = source && source.chunkIndex != null ? String(source.chunkIndex) : '未提供';
+            heading.textContent = title + ' · Chunk ' + chunk;
+            card.appendChild(heading);
+            if (source && source.score != null) {
+                const score = document.createElement('small');
+                score.className = 'text-muted d-block mb-2';
+                score.textContent = '相似度分数: ' + String(source.score);
+                card.appendChild(score);
+            }
+            const content = document.createElement('div');
+            content.className = 'summary-box bg-light';
+            content.textContent = source && source.content != null ? String(source.content) : '';
+            card.appendChild(content);
+            sourcesBox.appendChild(card);
+        }
+
+        async function run(mode) {
+            const currentId = ++requestId;
+            const question = questionInput.value.trim();
+            const topK = Number(topKInput.value);
+            const threshold = Number(thresholdInput.value);
+            clearResults();
+            if (!question) {
+                setStatus('请输入检索内容或问题。', 'error');
+                return;
+            }
+            if (!Number.isInteger(topK) || topK < 1 || topK > 10) {
+                setStatus('结果数量需为 1 到 10 的整数。', 'error');
+                return;
+            }
+            if (mode === 'search' && (!Number.isFinite(threshold) || threshold < 0 || threshold > 1)) {
+                setStatus('相似度阈值需在 0 到 1 之间。', 'error');
+                return;
+            }
+
+            searchButton.disabled = true;
+            askButton.disabled = true;
+            setStatus(mode === 'search' ? '正在检索文档片段…' : '正在生成回答并检索来源…', 'loading');
+            try {
+                const token = localStorage.getItem('jwtToken');
+                if (!token) throw new Error('请先登录后再使用文档检索。');
+                const isSearch = mode === 'search';
+                const response = await fetch(isSearch ? '/api/search/query' : '/api/search/ask', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + token
+                    },
+                    body: JSON.stringify(isSearch
+                        ? { query: question, topK: topK, similarityThreshold: threshold }
+                        : { question: question, topK: topK })
+                });
+                if (currentId !== requestId) return;
+                if (response.status === 401 || response.status === 403) {
+                    localStorage.removeItem('jwtToken');
+                    window.location.reload();
+                    throw new Error('登录已过期或当前账号无权访问，请重新登录。');
+                }
+                if (!response.ok) throw new Error('请求失败 (HTTP ' + response.status + ')。');
+                const envelope = await response.json();
+                if (currentId !== requestId) return;
+                const data = envelope && envelope.data;
+                const results = isSearch ? data : (data && data.sources);
+                if (!Array.isArray(results) || results.length === 0) {
+                    if (!isSearch && data && data.answer != null) {
+                        answerBox.textContent = String(data.answer);
+                        answerSection.classList.remove('d-none');
+                    }
+                    setStatus('没有找到相关片段。', 'success');
+                    return;
+                }
+                if (!isSearch) {
+                    answerBox.textContent = data && data.answer != null ? String(data.answer) : '';
+                    answerSection.classList.remove('d-none');
+                }
+                for (const source of results) appendSource(source);
+                sourcesSection.classList.remove('d-none');
+                setStatus(isSearch ? '检索完成，共找到 ' + results.length + ' 个片段。' :
+                    '回答已生成，返回 ' + results.length + ' 个来源片段。', 'success');
+            } catch (error) {
+                if (currentId === requestId) setStatus(error.message || '请求失败，请稍后重试。', 'error');
+            } finally {
+                if (currentId === requestId) {
+                    searchButton.disabled = false;
+                    askButton.disabled = false;
+                }
+            }
+        }
+
+        searchButton.addEventListener('click', function() { return run('search'); });
+        askButton.addEventListener('click', function() { return run('ask'); });
+    })();
 </script>
 <!-- Auth Modal (Login/Register) -->
 <div class="modal fade" id="authModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="authModalLabel" aria-hidden="true">

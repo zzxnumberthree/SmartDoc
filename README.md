@@ -24,6 +24,7 @@ Java 21、Spring Boot 3.4.1、Spring AI と Google Gemini の連携により、�
 
 - 文書を分割して Spring AI `SimpleVectorStore` に保存し、認証ユーザーの所有範囲で検索します。
 - Q&A 応答には検索元文書の情報を付与します。
+- Web 画面から認証付きの文書チャンク検索と出典付き Q&A を実行し、戻された文書名・チャンク番号・内容を確認できます。表示された出典の正確性は別途検証が必要です。
 - 現在のファイルベース vector store はローカルデモ向けであり、分散構成や本番規模を示すものではありません。
 
 ### 3. Agent Tool Calling と SSE
