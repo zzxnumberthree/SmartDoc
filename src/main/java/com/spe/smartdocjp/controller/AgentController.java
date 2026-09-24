@@ -8,11 +8,14 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
+
+import java.time.Duration;
 
 /**
  * REST controller exposing multi-turn intelligent chat endpoints for the AI Agent document assistant.
@@ -24,7 +27,12 @@ import reactor.core.publisher.Flux;
 @Slf4j
 public class AgentController {
 
+    private static final Duration DEFAULT_HEARTBEAT_INTERVAL = Duration.ofSeconds(15);
+
     private final AgentService agentService;
+
+    @Value("${smartdoc.agent.stream-heartbeat-interval:15s}")
+    private Duration heartbeatInterval = DEFAULT_HEARTBEAT_INTERVAL;
 
     /**
      * Handles multi-turn chat interaction with the AI Agent.
@@ -69,8 +77,33 @@ public class AgentController {
     }
 
     private Flux<ServerSentEvent<AgentStreamEvent>> toServerSentEvents(Flux<AgentStreamEvent> events) {
-        return events.map(event -> ServerSentEvent.<AgentStreamEvent>builder(event)
-                .event(event.type().wireName())
-                .build());
+        Flux<ServerSentEvent<AgentStreamEvent>> dataFrames = events.map(event ->
+                ServerSentEvent.<AgentStreamEvent>builder(event)
+                        .event(event.type().wireName())
+                        .build());
+        Flux<ServerSentEvent<AgentStreamEvent>> heartbeatFrames = Flux.interval(resolveHeartbeatInterval())
+                .map(tick -> ServerSentEvent.<AgentStreamEvent>builder()
+                        .comment("heartbeat")
+                        .build());
+
+        // Terminal data events stop both subscriptions; downstream cancellation does the same.
+        return Flux.merge(dataFrames, heartbeatFrames)
+                .takeUntil(frame -> frame.data() != null
+                        && (frame.data().type() == AgentStreamEventType.COMPLETE
+                        || frame.data().type() == AgentStreamEventType.ERROR));
+    }
+
+    private Duration resolveHeartbeatInterval() {
+        return (heartbeatInterval != null && !heartbeatInterval.isNegative() && !heartbeatInterval.isZero())
+                ? heartbeatInterval
+                : DEFAULT_HEARTBEAT_INTERVAL;
+    }
+
+    void setHeartbeatInterval(Duration heartbeatInterval) {
+        this.heartbeatInterval = heartbeatInterval;
+    }
+
+    Duration getHeartbeatInterval() {
+        return resolveHeartbeatInterval();
     }
 }

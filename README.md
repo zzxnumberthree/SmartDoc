@@ -30,7 +30,7 @@ Java 21、Spring Boot 3.4.1、Spring AI と Google Gemini の連携により、�
 
 - 文書検索、詳細取得、最近の文書、統計、比較の 5 つの読み取り専用 `@Tool` を登録しています。
 - Tool のユーザー範囲はサーバー側コンテキストから決定し、失敗は構造化され、内部情報を含まない結果として返します。
-- Web 応答は名前付き `token`、`complete`、`error` SSE event を使用します。再接続、heartbeat、負荷時の信頼性は未検証です。
+- Web 応答は名前付き `token`、`complete`、`error` SSE event と待機中の `heartbeat` comment を使用します。再接続や負荷時の信頼性は未検証です。
 
 ### 4. データ操作と論理削除 (CRUD & Logical Deletion)
 - ドキュメントの参照、更新、削除の基本機能。
