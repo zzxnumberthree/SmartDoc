@@ -1,45 +1,44 @@
 HELP.md
-target/
-.mvn/wrapper/maven-wrapper.jar
-!**/src/main/**/target/
-!**/src/test/**/target/
 
-### STS ###
+# Build output and Maven Wrapper download
+/target/
+/build/
+/out/
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE files
 .apt_generated
 .classpath
 .factorypath
 .project
-.settings
+.settings/
 .springBeans
-.sts4-cache
-
-### IntelliJ IDEA ###
-.idea
-*.iws
+.sts4-cache/
+.idea/
+.vscode/
 *.iml
 *.ipr
-
-### NetBeans ###
+*.iws
 /nbproject/private/
 /nbbuild/
 /dist/
 /nbdist/
 /.nb-gradle/
-build/
-!**/src/main/**/build/
-!**/src/test/**/build/
 
-### VS Code ###
-.vscode/
-
-/target/
+# Local runtime data and credentials
+/uploads/
 *.log
-*.iml
-.idea/
-/out/
 .env
+.env.*
+!.env.example
 application-*.yml
+*.jks
+*.p12
+*.pem
+*.key
 
-
-# Ignore uploaded files
-uploads/
+# Local agent and audit scratch files
+/.agents/
+/.m2-audit/
+/.codex/
+/work/
