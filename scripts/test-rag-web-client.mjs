@@ -137,6 +137,16 @@ assert.equal(textPreview.elements.ragPreviewText.textContent, '<script>alert(1)<
 assert.equal(textPreview.elements.ragPreviewText.children.length, 0, 'original text must not parse HTML');
 assert.equal(textPreview.elements.ragPreviewFrame.src, undefined);
 
+const pageLessPdfPreview = setup(url => url.endsWith('/download')
+    ? { ok: true, status: 200, blob: async () => new Blob(['x'.repeat(600), '%PDF-page-less original']) }
+    : jsonResponse([textSource]));
+await pageLessPdfPreview.elements.ragSearchButton.listeners.click();
+await pageLessPdfPreview.elements.ragSources.children[0].children[3].listeners.click();
+assert.equal(pageLessPdfPreview.elements.ragPreviewFrame.src, 'blob:source-fixture',
+    'a PDF header within the first 1024 bytes should open as a PDF without a page fragment');
+assert.match(pageLessPdfPreview.elements.ragPreviewStatus.textContent, /尚无页码/);
+assert.equal(pageLessPdfPreview.elements.ragPreviewText.className.includes('d-none'), true);
+
 let releaseOldText;
 const delayedText = setup(url => url.endsWith('/download')
     ? { ok: true, status: 200, blob: async () => ({

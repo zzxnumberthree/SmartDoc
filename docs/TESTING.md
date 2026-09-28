@@ -4,6 +4,8 @@ The default application test workflow is deterministic and does not require a lo
 
 ## Current evidence snapshot
 
+On 2026-09-28, after adding source previews to the comparison cards, this Windows host ran `clean verify` with Java 21.0.1: **94 tests passed, 0 failed, 0 errors, 0 skipped** across 19 Surefire XML reports. The JaCoCo report measured **76.60% line coverage** (1260/1645) and **47.48% branch coverage** (396/834). All three Node Web client scripts passed. The preview test uses DOM/API doubles; these results do not prove native browser PDF navigation, MySQL behavior, live Gemini quality, or citation accuracy.
+
 On 2026-09-28, after the PDF page source-preview changes, this Windows host ran `clean verify` with Java 21.0.1: **88 tests passed, 0 failed, 0 errors, 0 skipped**. The JaCoCo report measured **75.28% line coverage** and **44.96% branch coverage**. Both Node Web client scripts passed. These are deterministic local results and do not prove native browser PDF navigation, MySQL behavior, live Gemini quality, or citation accuracy.
 
 On 2026-09-24, after the document restore, Web client, and original-download changes, this Windows host ran `clean verify` with Java 21.0.1: **86 tests passed, 0 failed, 0 errors, 0 skipped** across 18 Surefire XML reports. The generated JaCoCo report measured **75.22% line coverage** and **44.81% branch coverage**. The document and RAG Web client Node scripts also passed using Node 24.15.0. These are deterministic local results, not MySQL, live Gemini, or browser proof.
@@ -103,7 +105,7 @@ This dependency-free Node test checks the authenticated search/ask request bodie
 node scripts/test-comparison-web-client.mjs
 ```
 
-The Spring test uses persisted documents and chunks to verify normalized shared/unique text, source chunk and PDF page metadata, bounded responses, owner/admin access, indistinguishable missing/foreign/deleted 404 responses, and bad-request validation. The Agent tool test verifies that the comparison summary includes source-linked differences. The Node test checks selection, authenticated API calls, safe rendering, missing-document handling, and stale response rejection using DOM/API doubles. These tests do not prove semantic equivalence, a real browser, live Gemini output, or comparison of unindexed originals.
+The Spring test uses persisted documents and chunks to verify normalized shared/unique text, source chunk and PDF page metadata, bounded responses, owner/admin access, indistinguishable missing/foreign/deleted 404 responses, and bad-request validation. The Agent tool test verifies that the comparison summary includes source-linked differences. The Node test checks selection, authenticated API calls, source-preview routing to each document, PDF page and text display (including a PDF header after leading bytes), safe rendering, preview URL cleanup, expired authentication, missing-document handling, and refresh/late-response races using DOM/API doubles. These tests do not prove semantic equivalence, a real browser or native PDF viewer, live Gemini output, or comparison of unindexed originals.
 
 ## Focused scripted provider-selection Tool Calling contract test
 

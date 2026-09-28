@@ -1,6 +1,6 @@
 # SmartDoc-JP Project Context
 
-Last synchronized: 2026-09-24 (Asia/Tokyo)
+Last synchronized: 2026-09-28 (Asia/Tokyo)
 
 ## Purpose
 
@@ -33,7 +33,7 @@ Source code and reproducible tests are authoritative for implemented behavior. T
 | Summarization | Upload schedules automatic PDF/text summary generation; a typed internal result separates success/failure from fixed safe fallback text | Whole-input, free-form summary; no quality or long-context evaluation; protected server logs retain exception causes; legacy rows written by older versions require an explicit cleanup policy |
 | Async processing | After-commit scheduling through a Spring-managed task executor | Feature behavior is tested; saturation can still fall back to the request thread through `CallerRunsPolicy` |
 | RAG and Q&A | Owner-filtered local `SimpleVectorStore`, persisted chunks, cited answers; Web panel for search and cited Q&A | Local/demo-grade durability; deterministic model and H2 plus a Node DOM/API double are used by tests; no browser or citation-accuracy proof |
-| Document comparison | Authenticated two-document comparison over persisted text lines, with shared/unique counts, bounded source snippets, chunk/page metadata, Web panel, and Agent tool output | NFKC/case/whitespace normalized textual comparison only; it does not determine semantic equivalence or importance; deterministic H2 and Node doubles, no real-browser proof |
+| Document comparison | Authenticated two-document comparison over persisted text lines, with shared/unique counts, bounded source snippets, chunk/page metadata, Web source preview of each difference, and Agent tool output | NFKC/case/whitespace normalized textual comparison only; it does not determine semantic equivalence or importance; deterministic H2 and Node doubles, no real-browser or native PDF viewer proof |
 | Recycle-bin restore | Owner or admin can restore a soft-deleted document with a retained source file; HTTP 202 schedules summary and RAG rebuild after commit; Web UI lists active/deleted documents with delete/restore controls | H2 integration tests verify scope, file checks, state change, and async scheduling; browser behavior, rebuild completion, and MySQL behavior are not proven by this operation's tests |
 | Original download | Owner or admin can download an active document as an attachment; stored path checks reject missing and escaping files | H2/MockMvc tests verify bytes, headers, scope, and failure responses; no real browser or MySQL download proof |
 | Streaming | Named `token`, `complete`, and `error` SSE events, and transport SSE comment heartbeats; POST Web client with buffered parsing | Deterministic unit/contract tests verify event mapping, heartbeats, and timeout/cancellation cleanup; no browser, reconnect, or load proof |
