@@ -2,12 +2,14 @@ package com.spe.smartdocjp.controller;
 
 import com.spe.smartdocjp.common.ApiResponse;
 import com.spe.smartdocjp.model.DTO.DocumentDTO;
+import com.spe.smartdocjp.model.DTO.DocumentComparisonDTO;
 import com.spe.smartdocjp.model.DTO.DocumentStatusDTO;
 import com.spe.smartdocjp.model.DTO.UpdateDocRequest;
 import com.spe.smartdocjp.model.DTO.UploadDocumentResponse;
 import com.spe.smartdocjp.model.entity.Document;
 import com.spe.smartdocjp.service.AiAnalysisService;
 import com.spe.smartdocjp.service.DocumentService;
+import com.spe.smartdocjp.service.DocumentComparisonService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +23,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import jakarta.validation.Valid;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -39,6 +42,7 @@ import java.util.List;
 public class DocumentController {
 
     private final DocumentService documentService;
+    private final DocumentComparisonService documentComparisonService;
     private final AiAnalysisService aiAnalysisService;
 
     @Operation(summary = "上传文档", description = "上传文档进行AI分析并进行向量化处理")
@@ -81,6 +85,14 @@ public class DocumentController {
     @GetMapping("/me")
     public ResponseEntity<ApiResponse<List<DocumentDTO>>> findUploadedDocumentsByUserId() {
         return ResponseEntity.ok(ApiResponse.success(documentService.findUploadedDocumentsForCurrentUser()));
+    }
+
+    @Operation(summary = "对比两份文档", description = "按已保存的文本段落进行精确对比，并返回差异原文及分块/页码来源")
+    @PostMapping("/compare")
+    public ResponseEntity<ApiResponse<DocumentComparisonDTO>> compareDocuments(
+            @Valid @RequestBody DocumentComparisonDTO.Request request) {
+        return ResponseEntity.ok(ApiResponse.success(
+                documentComparisonService.compare(request.documentIdA(), request.documentIdB())));
     }
 
     @Operation(summary = "获取回收站文档", description = "普通用户获取自己的回收站文档，管理员获取全部")

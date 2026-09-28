@@ -3,10 +3,12 @@ package com.spe.smartdocjp.service.agent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.spe.smartdocjp.model.DTO.AgentDTOs.AgentToolResult;
 import com.spe.smartdocjp.model.DTO.AgentDTOs.AgentToolResultCode;
+import com.spe.smartdocjp.model.DTO.DocumentComparisonDTO;
 import com.spe.smartdocjp.model.DTO.SearchDTOs.SearchResultResponse;
 import com.spe.smartdocjp.model.entity.Document;
 import com.spe.smartdocjp.repository.DocumentRepository;
 import com.spe.smartdocjp.service.RagService;
+import com.spe.smartdocjp.service.DocumentComparisonService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;
@@ -32,6 +34,7 @@ public class DocumentAgentTools {
 
     private final RagService ragService;
     private final DocumentRepository documentRepository;
+    private final DocumentComparisonService documentComparisonService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -190,17 +193,17 @@ public class DocumentAgentTools {
      * @param toolContext Server-supplied tool execution context.
      * @return Formatted comparison string.
      */
-    @Tool(description = "根据两个指定的文档 ID (docId1, docId2) 对比两份文档的内容差异、摘要要点和元数据。")
+    @Tool(description = "根据两个文档 ID 对比摘要和已索引原文中的规范化文本差异，并列出差异来源分块与 PDF 页码。")
     public AgentToolResult<String> compareDocuments(
             @ToolParam(description = "第一份待对比文档的 ID") Long docId1,
             @ToolParam(description = "第二份待对比文档的 ID") Long docId2,
             ToolContext toolContext) {
         log.info("Agent Tool executed: compareDocuments(docId1 = {}, docId2 = {})", docId1, docId2);
         try {
-            if (docId1 == null || docId2 == null) {
+            if (docId1 == null || docId2 == null || docId1 <= 0 || docId2 <= 0 || docId1.equals(docId2)) {
                 return AgentToolResult.failure(
                         AgentToolResultCode.INVALID_ARGUMENT,
-                        "必须同时提供两个文档 ID。",
+                        "必须提供两个不同的有效文档 ID。",
                         null,
                         false);
             }
@@ -226,7 +229,7 @@ public class DocumentAgentTools {
             Document d1 = opt1.get();
             Document d2 = opt2.get();
 
-            return AgentToolResult.success(String.format("""
+            String summary = String.format("""
                     两份文档信息对比表：
                     【文档 A - ID: %d】
                     - 标题：%s
@@ -243,9 +246,34 @@ public class DocumentAgentTools {
                     """,
                     d1.getId(), d1.getTitle() != null ? d1.getTitle() : "N/A", d1.getOriginalFilename(), d1.getChunkCount() != null ? d1.getChunkCount() : 0, d1.getSummary() != null ? d1.getSummary() : "暂无",
                     d2.getId(), d2.getTitle() != null ? d2.getTitle() : "N/A", d2.getOriginalFilename(), d2.getChunkCount() != null ? d2.getChunkCount() : 0, d2.getSummary() != null ? d2.getSummary() : "暂无"
-            ));
+            );
+            DocumentComparisonDTO comparison = documentComparisonService.compareForUser(docId1, docId2, userId, false);
+            StringBuilder result = new StringBuilder(summary);
+            result.append("\n已索引原文的规范化文本对比（忽略大小写及多余空白，不判断语义等价）：\n")
+                    .append("共同文本行（去重）：").append(comparison.sharedCount())
+                    .append("；文档 A 独有行：").append(comparison.onlyACount())
+                    .append("；文档 B 独有行：").append(comparison.onlyBCount()).append("\n");
+            appendComparisonSnippets(result, "A", comparison.onlyA());
+            appendComparisonSnippets(result, "B", comparison.onlyB());
+            return AgentToolResult.success(result.toString());
         } catch (Exception e) {
             return toolFailure("compareDocuments", e);
+        }
+    }
+
+    private void appendComparisonSnippets(StringBuilder result, String side, List<DocumentComparisonDTO.Snippet> snippets) {
+        int limit = Math.min(5, snippets.size());
+        for (int i = 0; i < limit; i++) {
+            DocumentComparisonDTO.Snippet snippet = snippets.get(i);
+            result.append("- 文档 ").append(side).append(" [Chunk #")
+                    .append(snippet.chunkIndex() != null ? snippet.chunkIndex() : "?");
+            if (snippet.pageNumber() != null) {
+                result.append("，PDF 第 ").append(snippet.pageNumber()).append(" 页");
+            }
+            result.append("] ").append(snippet.text()).append("\n");
+        }
+        if (snippets.size() > limit) {
+            result.append("- 文档 ").append(side).append(" 的其余差异请在网页审阅面板查看。\n");
         }
     }
 

@@ -189,6 +189,43 @@
         </div>
     </div>
 
+    <div class="card shadow-sm mb-4 border-success" id="documentComparisonPanel">
+        <div class="card-header bg-success text-white">
+            <h5 class="mb-0"><i class="bi bi-layout-split"></i> 双文档差异审阅</h5>
+        </div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">从已索引的原文片段提取非空文本行，展示两份文档各自独有的内容和所在位置。匹配时忽略大小写及多余空白，重复的相同行只计一次；不判断语义是否等价。</p>
+            <div class="row g-3 align-items-end mb-3">
+                <div class="col-md-5">
+                    <label for="compareDocumentA" class="form-label">文档 A</label>
+                    <select id="compareDocumentA" class="form-select" aria-label="选择文档 A"></select>
+                </div>
+                <div class="col-md-5">
+                    <label for="compareDocumentB" class="form-label">文档 B</label>
+                    <select id="compareDocumentB" class="form-select" aria-label="选择文档 B"></select>
+                </div>
+                <div class="col-md-2 d-grid gap-2">
+                    <button type="button" class="btn btn-outline-success" id="compareRefreshButton">刷新文档</button>
+                    <button type="button" class="btn btn-success" id="compareRunButton">开始对比</button>
+                </div>
+            </div>
+            <div id="compareStatus" class="alert alert-secondary mb-3" role="status" aria-live="polite">选择两份文档后开始对比。</div>
+            <section id="compareResults" class="d-none" aria-label="文档差异">
+                <div id="compareOverview" class="alert alert-light border"></div>
+                <div class="row g-3">
+                    <div class="col-lg-6">
+                        <h6 id="compareHeadingA"></h6>
+                        <div id="compareOnlyA" class="d-grid gap-2"></div>
+                    </div>
+                    <div class="col-lg-6">
+                        <h6 id="compareHeadingB"></h6>
+                        <div id="compareOnlyB" class="d-grid gap-2"></div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
     <div id="documentActionAlert" class="alert d-none" role="status"></div>
 
     <div class="card shadow-sm mb-4">
@@ -999,6 +1036,192 @@
         searchButton.addEventListener('click', function() { return run('search'); });
         askButton.addEventListener('click', function() { return run('ask'); });
         previewClose.addEventListener('click', closePreview);
+    })();
+</script>
+<script id="comparisonWebClient">
+    (function() {
+        const selectA = document.getElementById('compareDocumentA');
+        const selectB = document.getElementById('compareDocumentB');
+        const refreshButton = document.getElementById('compareRefreshButton');
+        const runButton = document.getElementById('compareRunButton');
+        const statusBox = document.getElementById('compareStatus');
+        const resultsBox = document.getElementById('compareResults');
+        const overview = document.getElementById('compareOverview');
+        const headingA = document.getElementById('compareHeadingA');
+        const headingB = document.getElementById('compareHeadingB');
+        const onlyA = document.getElementById('compareOnlyA');
+        const onlyB = document.getElementById('compareOnlyB');
+        let listRequestId = 0;
+        let compareRequestId = 0;
+
+        function setStatus(message, type) {
+            statusBox.textContent = message;
+            statusBox.className = 'alert mb-3 ' + (type === 'error' ? 'alert-danger' :
+                type === 'loading' ? 'alert-info' : type === 'success' ? 'alert-success' : 'alert-secondary');
+        }
+
+        function requireToken() {
+            const token = localStorage.getItem('jwtToken');
+            if (!token) throw new Error('请先登录后使用文档对比。');
+            return token;
+        }
+
+        async function readResponse(response) {
+            if (response.status === 401 || response.status === 403) {
+                localStorage.removeItem('jwtToken');
+                window.location.reload();
+                throw new Error('登录已过期，请重新登录。');
+            }
+            if (!response.ok) {
+                if (response.status === 400) {
+                    const problem = await response.json().catch(() => null);
+                    throw new Error(typeof problem?.detail === 'string' && problem.detail
+                        ? problem.detail : '请求参数无效，或文档超出对比上限。');
+                }
+                throw new Error(response.status === 404
+                    ? '文档不存在或当前账号无权访问。'
+                    : '请求失败 (HTTP ' + response.status + ')。');
+            }
+            const body = await response.json();
+            if (!body || body.data == null) throw new Error('服务器返回了无效结果。');
+            return body.data;
+        }
+
+        function addOption(select, doc) {
+            const option = document.createElement('option');
+            option.value = String(doc.id);
+            option.textContent = String(doc.fileName || '未命名文档') + ' · #' + String(doc.id);
+            select.appendChild(option);
+        }
+
+        function hasValidSelection() {
+            const idA = Number(selectA.value);
+            const idB = Number(selectB.value);
+            return Number.isSafeInteger(idA) && idA > 0 &&
+                Number.isSafeInteger(idB) && idB > 0 && idA !== idB;
+        }
+
+        async function refreshDocuments() {
+            const currentId = ++listRequestId;
+            compareRequestId++;
+            const previousA = selectA.value;
+            const previousB = selectB.value;
+            refreshButton.disabled = true;
+            runButton.disabled = true;
+            resultsBox.classList.add('d-none');
+            setStatus('正在读取可比较的文档…', 'loading');
+            try {
+                const token = requireToken();
+                const documents = [];
+                let page = 0;
+                let totalPages = 1;
+                while (page < totalPages) {
+                    const response = await fetch('/api/documents?size=100&sort=createdAt,desc&page=' + page, {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    const data = await readResponse(response);
+                    if (currentId !== listRequestId) return;
+                    if (!Array.isArray(data.content)) throw new Error('文档列表格式无效。');
+                    documents.push(...data.content);
+                    totalPages = Number.isSafeInteger(data.totalPages) && data.totalPages >= 0 ? data.totalPages : 0;
+                    page++;
+                }
+                const valid = documents.filter(doc => Number.isSafeInteger(Number(doc.id)) && Number(doc.id) > 0);
+                selectA.replaceChildren();
+                selectB.replaceChildren();
+                for (const doc of valid) {
+                    addOption(selectA, doc);
+                    addOption(selectB, doc);
+                }
+                if (valid.some(doc => String(doc.id) === previousA)) selectA.value = previousA;
+                else if (valid.length) selectA.value = String(valid[0].id);
+                if (valid.some(doc => String(doc.id) === previousB)) selectB.value = previousB;
+                else if (valid.length > 1) selectB.value = String(valid[1].id);
+                runButton.disabled = !hasValidSelection();
+                setStatus(valid.length < 2 ? '至少需要两份文档才能对比。' :
+                    '已加载 ' + valid.length + ' 份文档，选择两份后开始对比。', 'success');
+            } catch (error) {
+                if (currentId === listRequestId) {
+                    runButton.disabled = !hasValidSelection() || !localStorage.getItem('jwtToken');
+                    setStatus(error.message || '文档列表加载失败。', 'error');
+                }
+            } finally {
+                if (currentId === listRequestId) refreshButton.disabled = false;
+            }
+        }
+
+        function renderSnippets(container, snippets) {
+            container.replaceChildren();
+            if (!Array.isArray(snippets) || snippets.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'p-3 bg-white border rounded text-muted';
+                empty.textContent = '没有独有的文本片段。';
+                container.appendChild(empty);
+                return;
+            }
+            for (const snippet of snippets) {
+                const card = document.createElement('article');
+                card.className = 'p-3 bg-white border rounded';
+                const location = document.createElement('div');
+                location.className = 'small text-muted mb-2';
+                location.textContent = 'Chunk #' + String(snippet.chunkIndex == null ? '?' : snippet.chunkIndex) +
+                    (snippet.pageNumber == null ? '' : ' · PDF 第 ' + String(snippet.pageNumber) + ' 页');
+                const textBox = document.createElement('div');
+                textBox.className = 'summary-box bg-light';
+                textBox.textContent = snippet.text == null ? '' : String(snippet.text);
+                card.appendChild(location);
+                card.appendChild(textBox);
+                container.appendChild(card);
+            }
+        }
+
+        async function compare() {
+            const currentId = ++compareRequestId;
+            const idA = Number(selectA.value);
+            const idB = Number(selectB.value);
+            resultsBox.classList.add('d-none');
+            if (!hasValidSelection()) {
+                setStatus('请选择两份不同的文档。', 'error');
+                return;
+            }
+            runButton.disabled = true;
+            setStatus('正在比对已索引的原文片段…', 'loading');
+            try {
+                const response = await fetch('/api/documents/compare', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + requireToken() },
+                    body: JSON.stringify({ documentIdA: idA, documentIdB: idB })
+                });
+                const data = await readResponse(response);
+                if (currentId !== compareRequestId) return;
+                headingA.textContent = String(data.documentA.title) + ' · A 独有行 ' + String(data.onlyACount);
+                headingB.textContent = String(data.documentB.title) + ' · B 独有行 ' + String(data.onlyBCount);
+                overview.textContent = '共同文本行（去重） ' + String(data.sharedCount) + ' · A 独有行 ' +
+                    String(data.onlyACount) + ' · B 独有行 ' + String(data.onlyBCount) +
+                    (data.onlyATruncated || data.onlyBTruncated ? ' · 每侧最多展示前 20 条独有片段' : '');
+                renderSnippets(onlyA, data.onlyA);
+                renderSnippets(onlyB, data.onlyB);
+                resultsBox.classList.remove('d-none');
+                setStatus('对比完成。每条结果都标出对应的原文位置。', 'success');
+            } catch (error) {
+                if (currentId === compareRequestId) setStatus(error.message || '文档对比失败。', 'error');
+            } finally {
+                if (currentId === compareRequestId) runButton.disabled = false;
+            }
+        }
+
+        refreshButton.addEventListener('click', refreshDocuments);
+        runButton.addEventListener('click', compare);
+        for (const select of [selectA, selectB]) {
+            select.addEventListener('change', function() {
+                compareRequestId++;
+                resultsBox.classList.add('d-none');
+                runButton.disabled = !hasValidSelection();
+            });
+        }
+        window.addEventListener('DOMContentLoaded', function() {
+            if (localStorage.getItem('jwtToken')) refreshDocuments();
+        });
     })();
 </script>
 <!-- Auth Modal (Login/Register) -->

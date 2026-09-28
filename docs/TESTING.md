@@ -96,6 +96,15 @@ node scripts/test-rag-web-client.mjs
 
 This dependency-free Node test checks the authenticated search/ask request bodies, source and answer text rendering, authenticated original-file preview, PDF page URL selection, text preview escaping, preview URL cleanup, empty and error states, expired-authentication handling, and protection against a late response replacing a newer result. The API and DOM are simulated; it does not verify a real browser, live provider, PDF viewer behavior, or citation accuracy.
 
+## Document comparison
+
+```powershell
+.\mvnw.cmd -Dtest=DocumentComparisonIntegrationTest,DocumentAgentToolsTest test
+node scripts/test-comparison-web-client.mjs
+```
+
+The Spring test uses persisted documents and chunks to verify normalized shared/unique text, source chunk and PDF page metadata, bounded responses, owner/admin access, indistinguishable missing/foreign/deleted 404 responses, and bad-request validation. The Agent tool test verifies that the comparison summary includes source-linked differences. The Node test checks selection, authenticated API calls, safe rendering, missing-document handling, and stale response rejection using DOM/API doubles. These tests do not prove semantic equivalence, a real browser, live Gemini output, or comparison of unindexed originals.
+
 ## Focused scripted provider-selection Tool Calling contract test
 
 ```powershell

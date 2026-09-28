@@ -8,6 +8,7 @@ import com.spe.smartdocjp.model.entity.User;
 import com.spe.smartdocjp.repository.DocumentRepository;
 import com.spe.smartdocjp.security.CustomUserDetails;
 import com.spe.smartdocjp.service.RagService;
+import com.spe.smartdocjp.service.DocumentComparisonService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
@@ -143,7 +144,7 @@ class AgentToolCallingContractTest {
         private Long capturedUserId;
 
         private RecordingDocumentAgentTools(RagService ragService, DocumentRepository documentRepository) {
-            super(ragService, documentRepository);
+            super(ragService, documentRepository, mock(DocumentComparisonService.class));
         }
 
         @Override

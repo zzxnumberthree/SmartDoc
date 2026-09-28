@@ -8,6 +8,7 @@ import com.spe.smartdocjp.model.entity.User;
 import com.spe.smartdocjp.repository.DocumentRepository;
 import com.spe.smartdocjp.security.CustomUserDetails;
 import com.spe.smartdocjp.service.RagService;
+import com.spe.smartdocjp.service.DocumentComparisonService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
@@ -235,7 +236,8 @@ class AgentStreamContractTest {
     }
 
     private AgentService service(ChatModel chatModel) {
-        DocumentAgentTools tools = new DocumentAgentTools(mock(RagService.class), mock(DocumentRepository.class));
+        DocumentAgentTools tools = new DocumentAgentTools(
+                mock(RagService.class), mock(DocumentRepository.class), mock(DocumentComparisonService.class));
         AgentService service = new AgentService(
                 ChatClient.builder(chatModel),
                 MessageWindowChatMemory.builder()

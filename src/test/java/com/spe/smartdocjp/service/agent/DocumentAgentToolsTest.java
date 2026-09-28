@@ -2,10 +2,12 @@ package com.spe.smartdocjp.service.agent;
 
 import com.spe.smartdocjp.model.DTO.AgentDTOs.AgentToolResult;
 import com.spe.smartdocjp.model.DTO.AgentDTOs.AgentToolResultCode;
+import com.spe.smartdocjp.model.DTO.DocumentComparisonDTO;
 import com.spe.smartdocjp.model.DTO.SearchDTOs.SearchResultResponse;
 import com.spe.smartdocjp.model.entity.Document;
 import com.spe.smartdocjp.repository.DocumentRepository;
 import com.spe.smartdocjp.service.RagService;
+import com.spe.smartdocjp.service.DocumentComparisonService;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -38,6 +40,9 @@ class DocumentAgentToolsTest {
 
     @Mock
     private DocumentRepository documentRepository;
+
+    @Mock
+    private DocumentComparisonService documentComparisonService;
 
     @InjectMocks
     private DocumentAgentTools tools;
@@ -91,6 +96,14 @@ class DocumentAgentToolsTest {
 
         when(documentRepository.findByIdAndUserId(101L, USER_ID)).thenReturn(Optional.of(d1));
         when(documentRepository.findByIdAndUserId(102L, USER_ID)).thenReturn(Optional.of(d2));
+        when(documentComparisonService.compareForUser(101L, 102L, USER_ID, false))
+                .thenReturn(new DocumentComparisonDTO(
+                        new DocumentComparisonDTO.DocumentSummary(101L, "Doc 1"),
+                        new DocumentComparisonDTO.DocumentSummary(102L, "Doc 2"),
+                        1, 1, 1,
+                        List.of(new DocumentComparisonDTO.Snippet(101L, 3, 2, "Old policy")),
+                        List.of(new DocumentComparisonDTO.Snippet(102L, 4, 5, "New policy")),
+                        false, false));
 
         AgentToolResult<String> result = tools.compareDocuments(101L, 102L, USER_CONTEXT);
         Assertions.assertTrue(result.success());
@@ -98,6 +111,19 @@ class DocumentAgentToolsTest {
         Assertions.assertTrue(result.data().contains("Summary 1"));
         Assertions.assertTrue(result.data().contains("Doc 2"));
         Assertions.assertTrue(result.data().contains("Summary 2"));
+        Assertions.assertTrue(result.data().contains("Old policy"));
+        Assertions.assertTrue(result.data().contains("New policy"));
+        Assertions.assertTrue(result.data().contains("PDF 第 5 页"));
+        verify(documentComparisonService).compareForUser(101L, 102L, USER_ID, false);
+    }
+
+    @Test
+    void compareRejectsSameDocumentBeforeReadingAnySource() {
+        AgentToolResult<String> result = tools.compareDocuments(101L, 101L, USER_CONTEXT);
+
+        Assertions.assertFalse(result.success());
+        Assertions.assertEquals(AgentToolResultCode.INVALID_ARGUMENT, result.code());
+        org.mockito.Mockito.verifyNoInteractions(documentRepository, documentComparisonService);
     }
 
     @Test
