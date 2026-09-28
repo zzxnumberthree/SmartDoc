@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.reader.TextReader;
 import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
+import org.springframework.ai.reader.pdf.config.PdfDocumentReaderConfig;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
@@ -86,7 +87,10 @@ public class RagService {
             List<org.springframework.ai.document.Document> rawDocs;
             String filename = filePath.getFileName().toString().toLowerCase();
             if (filename.endsWith(".pdf")) {
-                PagePdfDocumentReader pdfReader = new PagePdfDocumentReader(new FileSystemResource(filePath));
+                PdfDocumentReaderConfig pdfConfig = PdfDocumentReaderConfig.builder()
+                        .withPagesPerDocument(1)
+                        .build();
+                PagePdfDocumentReader pdfReader = new PagePdfDocumentReader(new FileSystemResource(filePath), pdfConfig);
                 rawDocs = pdfReader.get();
             } else {
                 TextReader textReader = new TextReader(new FileSystemResource(filePath));
@@ -301,10 +305,23 @@ public class RagService {
                     chunkIndex = Integer.valueOf(meta.get("chunkIndex").toString());
                 } catch (NumberFormatException ignored) {}
             }
+            Integer pageNumber = parseIntegerMetadata(meta.get(PagePdfDocumentReader.METADATA_START_PAGE_NUMBER));
+            Integer endPageNumber = parseIntegerMetadata(meta.get(PagePdfDocumentReader.METADATA_END_PAGE_NUMBER));
             Double score = doc.getScore();
 
-            return new SearchResultResponse(docId, title, chunkIndex, doc.getText(), score);
+            return new SearchResultResponse(docId, title, chunkIndex, doc.getText(), score, pageNumber, endPageNumber);
         }).toList();
+    }
+
+    private Integer parseIntegerMetadata(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(value.toString());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private volatile ChatClient chatClient;

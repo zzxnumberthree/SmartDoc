@@ -38,14 +38,23 @@ public class SearchDTOs {
      * @param chunkIndex The index of the chunk in the source document.
      * @param content The text snippet of the chunk.
      * @param score The similarity score from vector search.
+     * @param pageNumber The one-based source PDF page number, when available.
+     * @param endPageNumber The ending source PDF page number, when available.
      */
     public record SearchResultResponse(
         Long documentId,
         String documentTitle,
         Integer chunkIndex,
         String content,
-        Double score
-    ) {}
+        Double score,
+        Integer pageNumber,
+        Integer endPageNumber
+    ) {
+        /** Backward-compatible constructor for callers that do not have source page metadata. */
+        public SearchResultResponse(Long documentId, String documentTitle, Integer chunkIndex, String content, Double score) {
+            this(documentId, documentTitle, chunkIndex, content, score, null, null);
+        }
+    }
 
     /**
      * Request for intelligent question answering (Ask AI).

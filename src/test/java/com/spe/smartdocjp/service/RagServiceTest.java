@@ -21,6 +21,11 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.File;
@@ -87,6 +92,69 @@ class RagServiceTest {
         Assertions.assertTrue(requestCaptor.getValue().hasFilterExpression());
         Assertions.assertTrue(requestCaptor.getValue().getFilterExpression().toString().contains("userId"));
         Assertions.assertTrue(requestCaptor.getValue().getFilterExpression().toString().contains("42"));
+    }
+
+    @Test
+    @DisplayName("语义检索响应包含可选 PDF 页码元数据")
+    void searchMapsPdfPageMetadata() {
+        org.springframework.ai.document.Document mockDoc = new org.springframework.ai.document.Document(
+                "chunk-pdf-1",
+                "PDF page content",
+                Map.of("documentId", 100L, "documentTitle", "guide.pdf", "chunkIndex", 2,
+                        "page_number", 3, "end_page_number", "3")
+        );
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(mockDoc));
+
+        SearchResultResponse result = ragService.search("query", 5, 0.0, 42L).get(0);
+
+        assertEquals(3, result.pageNumber());
+        assertEquals(3, result.endPageNumber());
+    }
+
+    @Test
+    @DisplayName("PDF 按页读取并将页码保存在向量及数据库分块元数据中")
+    void pdfIndexingPreservesOneBasedPageMetadata() throws Exception {
+        Path pdfFile = tempDir.resolve("two-pages.pdf");
+        try (PDDocument pdf = new PDDocument()) {
+            addPdfPage(pdf, "First page evidence content.");
+            addPdfPage(pdf, "Second page evidence content.");
+            pdf.save(pdfFile.toFile());
+        }
+        Document document = document(15L, "two-pages.pdf");
+        when(documentChunkRepository.saveAllAndFlush(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ragService.embedAndStoreDocument(document, pdfFile);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<org.springframework.ai.document.Document>> indexedCaptor = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore).add(indexedCaptor.capture());
+        List<org.springframework.ai.document.Document> indexed = indexedCaptor.getValue();
+        assertEquals(2, indexed.size());
+        assertEquals(1, ((Number) indexed.get(0).getMetadata().get("page_number")).intValue());
+        // Spring AI omits end_page_number for a single-page document; the API field remains optional.
+        Assertions.assertNull(indexed.get(0).getMetadata().get("end_page_number"));
+        assertEquals(2, ((Number) indexed.get(1).getMetadata().get("page_number")).intValue());
+        Assertions.assertNull(indexed.get(1).getMetadata().get("end_page_number"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<DocumentChunk>> savedCaptor = ArgumentCaptor.forClass(List.class);
+        verify(documentChunkRepository).saveAllAndFlush(savedCaptor.capture());
+        assertEquals(1, ((Number) new com.fasterxml.jackson.databind.ObjectMapper()
+                .readValue(savedCaptor.getValue().get(0).getMetadata(), Map.class).get("page_number")).intValue());
+        assertEquals(2, ((Number) new com.fasterxml.jackson.databind.ObjectMapper()
+                .readValue(savedCaptor.getValue().get(1).getMetadata(), Map.class).get("page_number")).intValue());
+    }
+
+    private void addPdfPage(PDDocument pdf, String text) throws Exception {
+        PDPage page = new PDPage();
+        pdf.addPage(page);
+        try (PDPageContentStream content = new PDPageContentStream(pdf, page)) {
+            content.beginText();
+            content.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+            content.newLineAtOffset(72, 720);
+            content.showText(text);
+            content.endText();
+        }
     }
 
     @Test

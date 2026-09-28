@@ -4,6 +4,8 @@ The default application test workflow is deterministic and does not require a lo
 
 ## Current evidence snapshot
 
+On 2026-09-28, after the PDF page source-preview changes, this Windows host ran `clean verify` with Java 21.0.1: **88 tests passed, 0 failed, 0 errors, 0 skipped**. The JaCoCo report measured **75.28% line coverage** and **44.96% branch coverage**. Both Node Web client scripts passed. These are deterministic local results and do not prove native browser PDF navigation, MySQL behavior, live Gemini quality, or citation accuracy.
+
 On 2026-09-24, after the document restore, Web client, and original-download changes, this Windows host ran `clean verify` with Java 21.0.1: **86 tests passed, 0 failed, 0 errors, 0 skipped** across 18 Surefire XML reports. The generated JaCoCo report measured **75.22% line coverage** and **44.81% branch coverage**. The document and RAG Web client Node scripts also passed using Node 24.15.0. These are deterministic local results, not MySQL, live Gemini, or browser proof.
 
 On 2026-09-18, after implementing the structured API validation contract and aligning the registration OpenAPI description, the Windows host ran `clean verify` with Maven 3.9.12, Java 21.0.1, and JaCoCo 0.8.15: **61 tests passed, 0 failed, 0 errors, 0 skipped** across 17 default test classes (17 Surefire XML reports). The report measured **72.99% line coverage** and **38.59% branch coverage**. See `docs/demo-results/2026-09-18-api-contract-coverage.md` for the report-level counters and scope (earlier snapshots are retained in `docs/demo-results/2026-09-18-windows-coverage.md` and `docs/demo-results/2026-09-16-windows-coverage.md`).
@@ -92,7 +94,7 @@ This dependency-free Node test executes the page's inline script with a small DO
 node scripts/test-rag-web-client.mjs
 ```
 
-This dependency-free Node test checks the authenticated search/ask request bodies, source and answer text rendering, empty and error states, expired-authentication handling, and protection against a late response replacing a newer result. The API and DOM are simulated; it does not verify a real browser, live provider, or citation accuracy.
+This dependency-free Node test checks the authenticated search/ask request bodies, source and answer text rendering, authenticated original-file preview, PDF page URL selection, text preview escaping, preview URL cleanup, empty and error states, expired-authentication handling, and protection against a late response replacing a newer result. The API and DOM are simulated; it does not verify a real browser, live provider, PDF viewer behavior, or citation accuracy.
 
 ## Focused scripted provider-selection Tool Calling contract test
 

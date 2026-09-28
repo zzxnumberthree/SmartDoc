@@ -149,6 +149,7 @@ abstract class AbstractVerticalSliceIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].documentId").value(documentId))
                 .andExpect(jsonPath("$.data[0].documentTitle").value("interview-evidence.pdf"))
+                .andExpect(jsonPath("$.data[0].pageNumber").value(1))
                 .andExpect(jsonPath("$.data[0].content").value(
                         org.hamcrest.Matchers.containsString(DeterministicAiTestConfiguration.FIXTURE_MARKER)));
 
@@ -163,7 +164,8 @@ abstract class AbstractVerticalSliceIntegrationTest {
                         org.hamcrest.Matchers.containsString("Grounded answer")))
                 .andExpect(jsonPath("$.data.answer").value(
                         org.hamcrest.Matchers.containsString("interview-evidence.pdf")))
-                .andExpect(jsonPath("$.data.sources[0].documentId").value(documentId));
+                .andExpect(jsonPath("$.data.sources[0].documentId").value(documentId))
+                .andExpect(jsonPath("$.data.sources[0].pageNumber").value(1));
 
         MvcResult streamStarted = mockMvc.perform(get("/api/agent/chat/stream")
                         .with(authentication(user))
