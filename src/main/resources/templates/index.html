@@ -144,6 +144,25 @@
         <div class="card-body">
             <label for="ragQuestionInput" class="form-label">检索内容或问题</label>
             <textarea id="ragQuestionInput" class="form-control mb-3" rows="3" placeholder="输入要检索的内容或问题"></textarea>
+            <fieldset class="mb-3">
+                <legend class="fs-6">搜索范围</legend>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="ragDocumentScope" id="ragDocumentScopeAll" value="all" checked>
+                    <label class="form-check-label" for="ragDocumentScopeAll">全部我的文档（默认）</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="ragDocumentScope" id="ragDocumentScopeSelected" value="selected">
+                    <label class="form-check-label" for="ragDocumentScopeSelected">指定文档（选择 1–20 份）</label>
+                </div>
+                <div id="ragDocumentScopePicker" class="border rounded p-3 mt-2 d-none">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <span id="ragDocumentCount" class="small text-muted">尚未选择文档。</span>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="ragDocumentRefreshButton">刷新文档</button>
+                    </div>
+                    <div id="ragDocumentListStatus" class="small text-muted mb-2" role="status" aria-live="polite">选择“指定文档”后加载你的文档。</div>
+                    <div id="ragDocumentList" class="d-grid gap-2" role="group" aria-label="选择用于检索的文档"></div>
+                </div>
+            </fieldset>
             <div class="row g-3 align-items-end mb-3">
                 <div class="col-sm-3 col-md-2">
                     <label for="ragTopKInput" class="form-label">结果数量 (1–10)</label>
@@ -861,14 +880,145 @@
         const previewFrame = document.getElementById('ragPreviewFrame');
         const previewText = document.getElementById('ragPreviewText');
         const previewClose = document.getElementById('ragPreviewClose');
+        const allDocumentsRadio = document.getElementById('ragDocumentScopeAll');
+        const selectedDocumentsRadio = document.getElementById('ragDocumentScopeSelected');
+        const documentScopePicker = document.getElementById('ragDocumentScopePicker');
+        const documentRefreshButton = document.getElementById('ragDocumentRefreshButton');
+        const documentListStatus = document.getElementById('ragDocumentListStatus');
+        const documentCount = document.getElementById('ragDocumentCount');
+        const documentList = document.getElementById('ragDocumentList');
         let requestId = 0;
         let previewRequestId = 0;
         let previewUrl = null;
+        let listRequestId = 0;
+        let documentCheckboxes = [];
+        let documentsLoaded = false;
+        let documentListLoading = false;
+        let documentListError = false;
+        let requestPending = false;
 
         function setStatus(message, kind) {
             statusBox.textContent = message;
             statusBox.className = 'alert mb-3 ' + (kind === 'error' ? 'alert-danger' :
                 kind === 'loading' ? 'alert-info' : kind === 'success' ? 'alert-success' : 'alert-secondary');
+        }
+
+        function selectedDocumentIds() {
+            return documentCheckboxes.filter(checkbox => checkbox.checked)
+                .map(checkbox => Number(checkbox.value));
+        }
+
+        function isSelectedScope() {
+            return selectedDocumentsRadio.checked;
+        }
+
+        function syncDocumentSelection() {
+            const ids = selectedDocumentIds();
+            const valid = ids.length >= 1 && ids.length <= 20 &&
+                ids.every(id => Number.isSafeInteger(id) && id > 0) && new Set(ids).size === ids.length;
+            documentCount.textContent = ids.length === 0
+                ? '尚未选择文档。请选择 1–20 份文档。'
+                : '已选择 ' + ids.length + ' 份文档' + (ids.length > 20 ? '；最多可选择 20 份。' : '。');
+            for (const checkbox of documentCheckboxes) {
+                checkbox.disabled = !checkbox.checked && ids.length >= 20;
+            }
+            syncButtons();
+            return valid ? ids : null;
+        }
+
+        function syncButtons() {
+            const ids = selectedDocumentIds();
+            const invalidIds = ids.length < 1 || ids.length > 20 ||
+                !ids.every(id => Number.isSafeInteger(id) && id > 0) || new Set(ids).size !== ids.length;
+            const selectedInvalid = isSelectedScope() && (documentListLoading || documentListError || invalidIds);
+            searchButton.disabled = requestPending || selectedInvalid;
+            askButton.disabled = requestPending || selectedInvalid;
+        }
+
+        function invalidateForScopeChange(message) {
+            requestId++;
+            requestPending = false;
+            clearResults();
+            setStatus(message, 'default');
+            syncButtons();
+        }
+
+        function appendDocumentCheckbox(doc, checked) {
+            const row = document.createElement('div');
+            row.className = 'form-check';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'form-check-input';
+            checkbox.id = 'ragDocument_' + String(doc.id);
+            checkbox.value = String(doc.id);
+            checkbox.checked = checked;
+            const label = document.createElement('label');
+            label.className = 'form-check-label';
+            label.htmlFor = checkbox.id;
+            label.textContent = String(doc.fileName || '未命名文档') + ' · #' + String(doc.id);
+            checkbox.addEventListener('change', function() {
+                invalidateForScopeChange('文档范围已更改；请选择检索或带出处回答。');
+                syncDocumentSelection();
+            });
+            row.appendChild(checkbox);
+            row.appendChild(label);
+            documentList.appendChild(row);
+            documentCheckboxes.push(checkbox);
+        }
+
+        async function refreshDocuments() {
+            const currentListId = ++listRequestId;
+            const previousSelection = new Set(selectedDocumentIds().map(String));
+            documentListLoading = true;
+            documentListError = false;
+            documentsLoaded = false;
+            documentRefreshButton.disabled = true;
+            documentListStatus.textContent = '正在读取你的文档…';
+            documentList.replaceChildren();
+            documentCheckboxes = [];
+            syncDocumentSelection();
+            try {
+                const token = localStorage.getItem('jwtToken');
+                if (!token) throw new Error('请先登录后再读取文档列表。');
+                const response = await fetch('/api/documents/me', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (currentListId !== listRequestId) return;
+                if (response.status === 401 || response.status === 403) {
+                    localStorage.removeItem('jwtToken');
+                    window.location.reload();
+                    throw new Error('登录已过期，请重新登录。');
+                }
+                if (!response.ok) throw new Error('文档列表读取失败 (HTTP ' + response.status + ')。');
+                const envelope = await response.json();
+                if (currentListId !== listRequestId) return;
+                const docs = envelope && envelope.data;
+                if (!Array.isArray(docs)) throw new Error('文档列表格式无效。');
+                const seen = new Set();
+                const validDocs = docs.filter(doc => {
+                    const id = Number(doc && doc.id);
+                    if (!Number.isSafeInteger(id) || id <= 0 || seen.has(id)) return false;
+                    seen.add(id);
+                    return true;
+                });
+                for (const doc of validDocs) appendDocumentCheckbox(doc, previousSelection.has(String(doc.id)));
+                documentsLoaded = true;
+                documentListStatus.textContent = validDocs.length === 0
+                    ? '你还没有可检索的文档。'
+                    : '已加载 ' + validDocs.length + ' 份文档。';
+            } catch (error) {
+                if (currentListId === listRequestId) {
+                    documentListError = true;
+                    documentsLoaded = false;
+                    documentListStatus.textContent = error.message || '文档列表加载失败，请重试。';
+                }
+            } finally {
+                if (currentListId === listRequestId) {
+                    documentListLoading = false;
+                    documentRefreshButton.disabled = false;
+                    syncDocumentSelection();
+                }
+            }
         }
 
         function clearResults() {
@@ -975,7 +1125,15 @@
             const question = questionInput.value.trim();
             const topK = Number(topKInput.value);
             const threshold = Number(thresholdInput.value);
+            const documentIds = isSelectedScope() ? syncDocumentSelection() : null;
+            const scopeLabel = isSelectedScope() ? '已选择 ' + (documentIds ? documentIds.length : 0) + ' 份文档' : '全部我的文档';
             clearResults();
+            if (isSelectedScope() && (!documentsLoaded || documentListLoading || documentListError || !documentIds)) {
+                setStatus(documentListLoading ? '正在读取文档列表…' :
+                    documentListError ? '文档列表加载失败，请刷新后重试。' : '请选择 1–20 份文档。', 'error');
+                syncButtons();
+                return;
+            }
             if (!question) {
                 setStatus('请输入检索内容或问题。', 'error');
                 return;
@@ -989,22 +1147,24 @@
                 return;
             }
 
-            searchButton.disabled = true;
-            askButton.disabled = true;
+            requestPending = true;
+            syncButtons();
             setStatus(mode === 'search' ? '正在检索文档片段…' : '正在生成回答并检索来源…', 'loading');
             try {
                 const token = localStorage.getItem('jwtToken');
                 if (!token) throw new Error('请先登录后再使用文档检索。');
                 const isSearch = mode === 'search';
+                const body = isSearch
+                    ? { query: question, topK: topK, similarityThreshold: threshold }
+                    : { question: question, topK: topK };
+                if (documentIds) body.documentIds = documentIds;
                 const response = await fetch(isSearch ? '/api/search/query' : '/api/search/ask', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Authorization': 'Bearer ' + token
                     },
-                    body: JSON.stringify(isSearch
-                        ? { query: question, topK: topK, similarityThreshold: threshold }
-                        : { question: question, topK: topK })
+                    body: JSON.stringify(body)
                 });
                 if (currentId !== requestId) return;
                 if (response.status === 401 || response.status === 403) {
@@ -1022,7 +1182,7 @@
                         answerBox.textContent = String(data.answer);
                         answerSection.classList.remove('d-none');
                     }
-                    setStatus('没有找到相关片段。', 'success');
+                    setStatus('没有找到相关片段。范围：' + scopeLabel + '。', 'success');
                     return;
                 }
                 if (!isSearch) {
@@ -1031,21 +1191,41 @@
                 }
                 for (const source of results) appendSource(source);
                 sourcesSection.classList.remove('d-none');
-                setStatus(isSearch ? '检索完成，共找到 ' + results.length + ' 个片段。' :
-                    '回答已生成，返回 ' + results.length + ' 个来源片段。', 'success');
+                setStatus((isSearch ? '检索完成，共找到 ' + results.length + ' 个片段。' :
+                    '回答已生成，返回 ' + results.length + ' 个来源片段。') + ' 范围：' + scopeLabel + '。', 'success');
             } catch (error) {
                 if (currentId === requestId) setStatus(error.message || '请求失败，请稍后重试。', 'error');
             } finally {
                 if (currentId === requestId) {
-                    searchButton.disabled = false;
-                    askButton.disabled = false;
+                    requestPending = false;
+                    syncButtons();
                 }
             }
         }
 
         searchButton.addEventListener('click', function() { return run('search'); });
         askButton.addEventListener('click', function() { return run('ask'); });
+        allDocumentsRadio.addEventListener('change', function() {
+            if (!allDocumentsRadio.checked) return;
+            listRequestId++;
+            documentListLoading = false;
+            documentRefreshButton.disabled = false;
+            documentScopePicker.classList.add('d-none');
+            invalidateForScopeChange('搜索范围已更改为全部我的文档。');
+        });
+        selectedDocumentsRadio.addEventListener('change', function() {
+            if (!selectedDocumentsRadio.checked) return;
+            documentScopePicker.classList.remove('d-none');
+            invalidateForScopeChange('搜索范围已更改；正在准备指定文档。');
+            if (!documentsLoaded || documentListError) return refreshDocuments();
+            syncDocumentSelection();
+        });
+        documentRefreshButton.addEventListener('click', function() {
+            invalidateForScopeChange('正在刷新文档列表…');
+            return refreshDocuments();
+        });
         previewClose.addEventListener('click', closePreview);
+        syncButtons();
     })();
 </script>
 <script id="comparisonWebClient">

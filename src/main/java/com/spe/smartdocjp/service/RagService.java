@@ -3,6 +3,7 @@ package com.spe.smartdocjp.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.spe.smartdocjp.model.DTO.SearchDTOs.*;
 import com.spe.smartdocjp.exception.RagEmbeddingException;
+import com.spe.smartdocjp.exception.DocumentNotFoundException;
 import com.spe.smartdocjp.model.entity.Document;
 import com.spe.smartdocjp.model.entity.DocumentChunk;
 import com.spe.smartdocjp.repository.DocumentChunkRepository;
@@ -17,6 +18,7 @@ import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.stereotype.Service;
@@ -41,6 +43,7 @@ import java.util.UUID;
 public class RagService {
 
     static final String USER_ID_METADATA = "userId";
+    private static final String EMPTY_SELECTED_SCOPE_ANSWER = "選択された文書から参照できる文書片が見つかりませんでした。";
 
     private final VectorStore vectorStore;
     private final DocumentRepository documentRepository;
@@ -278,14 +281,29 @@ public class RagService {
      * @return List of SearchResultResponse.
      */
     public List<SearchResultResponse> search(String query, int topK, double similarityThreshold, Long userId) {
+        return search(query, topK, similarityThreshold, userId, null);
+    }
+
+    /** Performs semantic search optionally restricted to the owner's selected active documents. */
+    public List<SearchResultResponse> search(
+            String query, int topK, double similarityThreshold, Long userId, List<Long> documentIds) {
         requireUserId(userId);
+        validateDocumentIds(documentIds, userId);
         log.info("Executing vector search for user ID: {}, topK: {}, threshold: {}", userId, topK, similarityThreshold);
+
+        FilterExpressionBuilder filter = new FilterExpressionBuilder();
+        FilterExpressionBuilder.Op filterExpression = filter.eq(USER_ID_METADATA, userId);
+        if (documentIds != null) {
+            filterExpression = filter.and(filterExpression,
+                    filter.in("documentId", documentIds.stream()
+                            .map(id -> (Object) new SpelLongLiteral(id)).toList()));
+        }
 
         SearchRequest request = SearchRequest.builder()
                 .query(query)
                 .topK(topK)
                 .similarityThreshold(similarityThreshold)
-                .filterExpression(USER_ID_METADATA + " == " + userId)
+                .filterExpression(filterExpression.build())
                 .build();
 
         List<org.springframework.ai.document.Document> results = vectorStore.similaritySearch(request);
@@ -352,10 +370,19 @@ public class RagService {
      * @return AskResponse containing the AI answer and cited sources.
      */
     public AskResponse ask(String question, int topK, Long userId) {
+        return ask(question, topK, userId, null);
+    }
+
+    /** Answers a question using only the owner's selected active documents when a scope is supplied. */
+    public AskResponse ask(String question, int topK, Long userId, List<Long> documentIds) {
         requireUserId(userId);
         log.info("Executing RAG ask for user ID: {}, topK: {}", userId, topK);
 
-        List<SearchResultResponse> sources = search(question, topK, 0.0, userId);
+        List<SearchResultResponse> sources = search(question, topK, 0.0, userId, documentIds);
+
+        if (documentIds != null && sources.isEmpty()) {
+            return new AskResponse(EMPTY_SELECTED_SCOPE_ANSWER, List.of());
+        }
 
         StringBuilder contextBuilder = new StringBuilder();
         for (int i = 0; i < sources.size(); i++) {
@@ -393,6 +420,56 @@ public class RagService {
         String answer = client.prompt(finalPrompt).call().content();
 
         return new AskResponse(answer, sources);
+    }
+
+    private void validateDocumentIds(List<Long> documentIds, Long userId) {
+        if (documentIds == null) {
+            return;
+        }
+        if (documentIds.isEmpty() || documentIds.size() > 20
+                || documentIds.stream().anyMatch(id -> id == null || id <= 0)
+                || documentIds.stream().distinct().count() != documentIds.size()) {
+            throw new IllegalArgumentException("documentIds は重複のない正の ID を1〜20件で指定してください");
+        }
+
+        List<Document> accessibleDocuments = documentRepository.findByIdInAndUserId(documentIds, userId);
+        if (accessibleDocuments.size() != documentIds.size()) {
+            throw new DocumentNotFoundException();
+        }
+    }
+
+    /** Preserves Long literal typing through SimpleVectorStore's SpEL filter converter. */
+    private static final class SpelLongLiteral extends Number {
+        private final long value;
+
+        private SpelLongLiteral(long value) {
+            this.value = value;
+        }
+
+        @Override
+        public int intValue() {
+            return (int) value;
+        }
+
+        @Override
+        public long longValue() {
+            return value;
+        }
+
+        @Override
+        public float floatValue() {
+            return value;
+        }
+
+        @Override
+        public double doubleValue() {
+            return value;
+        }
+
+        @Override
+        public String toString() {
+            return value + "L";
+        }
     }
 
     private void requireUserId(Long userId) {

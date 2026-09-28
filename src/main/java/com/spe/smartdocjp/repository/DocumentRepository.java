@@ -11,6 +11,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Collection;
 
 @Repository // zeng
 public interface DocumentRepository extends JpaRepository<Document, Long>{
@@ -19,6 +20,8 @@ public interface DocumentRepository extends JpaRepository<Document, Long>{
     List<Document> findByUserId(Long userId);
 
     Optional<Document> findByIdAndUserId(Long id, Long userId);
+
+    List<Document> findByIdInAndUserId(Collection<Long> ids, Long userId);
 
     List<Document> findByUserIdOrderByCreatedAtDesc(Long userId);
 

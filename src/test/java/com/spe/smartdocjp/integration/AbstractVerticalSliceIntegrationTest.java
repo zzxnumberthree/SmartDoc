@@ -331,6 +331,117 @@ abstract class AbstractVerticalSliceIntegrationTest {
         assertFalse(comparison.toString().contains("USER_B_SECRET"));
     }
 
+    @Test
+    void selectedDocumentScopeRestrictsQueryAndAskToOwnerSelectedDocuments() throws Exception {
+        Authentication ownerAuthentication = createAuthentication("scoped-rag-owner");
+        Authentication otherAuthentication = createAuthentication("scoped-rag-other");
+        User owner = ((CustomUserDetails) ownerAuthentication.getPrincipal()).getUser();
+        User otherOwner = ((CustomUserDetails) otherAuthentication.getPrincipal()).getUser();
+
+        Document selectedForQuery = saveCompletedDocument(owner, "SCOPED_QUERY_DOC", "query evidence");
+        Document selectedForAsk = saveCompletedDocument(owner, "SCOPED_ASK_DOC", "ask evidence");
+        Document unselected = saveCompletedDocument(owner, "UNSELECTED_DOC", "unselected evidence");
+        Document foreign = saveCompletedDocument(otherOwner, "FOREIGN_SCOPED_DOC", "foreign evidence");
+        vectorStore.add(List.of(
+                vectorChunk("scoped-query", selectedForQuery, "SCOPED_QUERY_SECRET"),
+                vectorChunk("scoped-ask", selectedForAsk, "SCOPED_ASK_SECRET"),
+                vectorChunk("scoped-unselected", unselected, "UNSELECTED_SECRET"),
+                vectorChunk("scoped-foreign", foreign, "FOREIGN_SECRET")
+        ));
+
+        String queryBody = mockMvc.perform(post("/api/search/query")
+                        .with(authentication(ownerAuthentication))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"query":"secret","topK":5,"similarityThreshold":0.0,"documentIds":[%d]}
+                                """.formatted(selectedForQuery.getId())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].documentId").value(selectedForQuery.getId()))
+                .andReturn().getResponse().getContentAsString();
+        assertTrue(queryBody.contains("SCOPED_QUERY_SECRET"));
+        assertFalse(queryBody.contains("SCOPED_ASK_SECRET"));
+        assertFalse(queryBody.contains("UNSELECTED_SECRET"));
+        assertFalse(queryBody.contains("FOREIGN_SECRET"));
+
+        String askBody = mockMvc.perform(post("/api/search/ask")
+                        .with(authentication(ownerAuthentication))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"question":"secret","topK":5,"documentIds":[%d]}
+                                """.formatted(selectedForAsk.getId())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.sources.length()").value(1))
+                .andExpect(jsonPath("$.data.sources[0].documentId").value(selectedForAsk.getId()))
+                .andReturn().getResponse().getContentAsString();
+        assertTrue(askBody.contains("SCOPED_ASK_SECRET"));
+        assertFalse(askBody.contains("SCOPED_QUERY_SECRET"));
+        assertFalse(askBody.contains("UNSELECTED_SECRET"));
+        assertFalse(askBody.contains("FOREIGN_SECRET"));
+    }
+
+    @Test
+    void selectedDocumentScopeRejectsInvalidListsAndUnavailableDocuments() throws Exception {
+        Authentication ownerAuthentication = createAuthentication("scoped-invalid-owner");
+        Authentication otherAuthentication = createAuthentication("scoped-invalid-other");
+        User owner = ((CustomUserDetails) ownerAuthentication.getPrincipal()).getUser();
+        User otherOwner = ((CustomUserDetails) otherAuthentication.getPrincipal()).getUser();
+        Document ownDocument = saveCompletedDocument(owner, "SCOPED_VALID_DOC", "valid evidence");
+        Document foreignDocument = saveCompletedDocument(otherOwner, "SCOPED_FOREIGN_DOC", "foreign evidence");
+        Document deletedDocument = saveCompletedDocument(owner, "SCOPED_DELETED_DOC", "deleted evidence");
+        documentRepository.deleteById(deletedDocument.getId());
+        documentRepository.flush();
+
+        for (Long unavailableId : List.of(foreignDocument.getId(), deletedDocument.getId(), Long.MAX_VALUE)) {
+            mockMvc.perform(post("/api/search/query")
+                            .with(authentication(ownerAuthentication))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"query":"secret","documentIds":[%d]}
+                                    """.formatted(unavailableId)))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.detail").value("文档未找到"));
+        }
+
+        mockMvc.perform(post("/api/search/ask")
+                        .with(authentication(ownerAuthentication))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"question":"secret","documentIds":[%d]}
+                                """.formatted(foreignDocument.getId())))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("文档未找到"));
+
+        for (String documentIds : List.of("[]", "[%d,%d]".formatted(ownDocument.getId(), ownDocument.getId()),
+                "[0]", "[" + java.util.stream.LongStream.rangeClosed(1, 21)
+                        .mapToObj(Long::toString).collect(java.util.stream.Collectors.joining(",")) + "]")) {
+            mockMvc.perform(post("/api/search/query")
+                            .with(authentication(ownerAuthentication))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"query":"secret","documentIds":%s}
+                                    """.formatted(documentIds)))
+                    .andExpect(status().isBadRequest());
+        }
+    }
+
+    @Test
+    void selectedDocumentAskWithNoChunksReturnsDeterministicNoSourceAnswer() throws Exception {
+        Authentication ownerAuthentication = createAuthentication("scoped-empty-owner");
+        User owner = ((CustomUserDetails) ownerAuthentication.getPrincipal()).getUser();
+        Document indexedButEmpty = saveCompletedDocument(owner, "SCOPED_EMPTY_DOC", "no extracted chunks");
+
+        mockMvc.perform(post("/api/search/ask")
+                        .with(authentication(ownerAuthentication))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"question":"What is here?","documentIds":[%d]}
+                                """.formatted(indexedButEmpty.getId())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.answer").value("選択された文書から参照できる文書片が見つかりませんでした。"))
+                .andExpect(jsonPath("$.data.sources.length()").value(0));
+    }
+
     private Document saveCompletedDocument(User owner, String title, String summary) {
         return documentRepository.saveAndFlush(Document.builder()
                 .title(title)

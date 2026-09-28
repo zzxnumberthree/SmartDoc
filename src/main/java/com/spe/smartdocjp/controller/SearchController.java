@@ -40,7 +40,8 @@ public class SearchController {
                 request.query(),
                 request.getEffectiveTopK(),
                 request.getEffectiveThreshold(),
-                userId
+                userId,
+                request.documentIds()
         );
         return ResponseEntity.ok(ApiResponse.success(results, "检索成功"));
     }
@@ -58,7 +59,8 @@ public class SearchController {
         AskResponse response = ragService.ask(
                 request.question(),
                 request.getEffectiveTopK(),
-                userId
+                userId,
+                request.documentIds()
         );
         return ResponseEntity.ok(ApiResponse.success(response, "问答成功"));
     }

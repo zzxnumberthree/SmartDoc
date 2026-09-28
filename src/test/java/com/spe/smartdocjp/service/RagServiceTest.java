@@ -112,6 +112,20 @@ class RagServiceTest {
     }
 
     @Test
+    @DisplayName("選択文書から検索結果がない場合はAIを呼ばず定型回答を返す")
+    void askWithSelectedDocumentsAndNoChunksReturnsNoSourceAnswerWithoutCallingAi() {
+        when(documentRepository.findByIdInAndUserId(List.of(99L), 42L))
+                .thenReturn(List.of(mock(Document.class)));
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+
+        AskResponse response = ragService.ask("question", 5, 42L, List.of(99L));
+
+        assertEquals("選択された文書から参照できる文書片が見つかりませんでした。", response.answer());
+        assertEquals(List.of(), response.sources());
+        verifyNoInteractions(chatClientBuilder);
+    }
+
+    @Test
     @DisplayName("PDF 按页读取并将页码保存在向量及数据库分块元数据中")
     void pdfIndexingPreservesOneBasedPageMetadata() throws Exception {
         Path pdfFile = tempDir.resolve("two-pages.pdf");

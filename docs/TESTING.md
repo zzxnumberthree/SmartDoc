@@ -4,6 +4,8 @@ The default application test workflow is deterministic and does not require a lo
 
 ## Current evidence snapshot
 
+On 2026-09-28, after adding owner-selected document scope to RAG search and ask, this Windows host ran `clean verify` with Java 21.0.1: **98 tests passed, 0 failed, 0 errors, 0 skipped** across 19 Surefire XML reports. JaCoCo measured **76.75% line coverage** (1291/1682) and **48.84% branch coverage** (422/864). All three Node Web client scripts passed. These deterministic tests include the real local `SimpleVectorStore` filter path, but do not prove live Gemini answers, a native browser, MySQL, or citation accuracy.
+
 On 2026-09-28, after adding source previews to the comparison cards, this Windows host ran `clean verify` with Java 21.0.1: **94 tests passed, 0 failed, 0 errors, 0 skipped** across 19 Surefire XML reports. The JaCoCo report measured **76.60% line coverage** (1260/1645) and **47.48% branch coverage** (396/834). All three Node Web client scripts passed. The preview test uses DOM/API doubles; these results do not prove native browser PDF navigation, MySQL behavior, live Gemini quality, or citation accuracy.
 
 On 2026-09-28, after the PDF page source-preview changes, this Windows host ran `clean verify` with Java 21.0.1: **88 tests passed, 0 failed, 0 errors, 0 skipped**. The JaCoCo report measured **75.28% line coverage** and **44.96% branch coverage**. Both Node Web client scripts passed. These are deterministic local results and do not prove native browser PDF navigation, MySQL behavior, live Gemini quality, or citation accuracy.
@@ -96,7 +98,16 @@ This dependency-free Node test executes the page's inline script with a small DO
 node scripts/test-rag-web-client.mjs
 ```
 
-This dependency-free Node test checks the authenticated search/ask request bodies, source and answer text rendering, authenticated original-file preview, PDF page URL selection, text preview escaping, preview URL cleanup, empty and error states, expired-authentication handling, and protection against a late response replacing a newer result. The API and DOM are simulated; it does not verify a real browser, live provider, PDF viewer behavior, or citation accuracy.
+This dependency-free Node test checks the authenticated search/ask request bodies, all-own-documents and selected-document scope controls, owner-document list loading, source and answer text rendering, authenticated original-file preview, PDF page URL selection, text preview escaping, preview URL cleanup, empty and error states, expired-authentication handling, and protection against late responses after a scope change. The API and DOM are simulated; it does not verify a real browser, live provider, PDF viewer behavior, or citation accuracy.
+
+## Selected-document RAG scope
+
+```powershell
+.\mvnw.cmd '-Dtest=DeterministicVerticalSliceTest,RagServiceTest' test
+node scripts/test-rag-web-client.mjs
+```
+
+The deterministic vertical slice uses H2 and the real local `SimpleVectorStore` implementation to verify that query and ask return sources only from selected active documents owned by the caller. It checks the combined user/document filter, a uniform 404 for missing, foreign, and deleted selections, request bounds, and a deterministic no-source answer for an empty selected scope. The unit test checks that this empty case does not call the AI client. The Web test checks selected ID payloads and that changing or refreshing the scope invalidates an in-flight result. This does not establish answer quality or citation correctness from a live model.
 
 ## Document comparison
 

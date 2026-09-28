@@ -1,7 +1,12 @@
 package com.spe.smartdocjp.model.DTO;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import java.util.List;
+import java.util.HashSet;
 
 /**
  * Collection of Data Transfer Objects for vector search and RAG ask operations.
@@ -20,8 +25,20 @@ public class SearchDTOs {
 
         Integer topK,
 
-        Double similarityThreshold
+        Double similarityThreshold,
+
+        @Size(min = 1, max = 20, message = "documentIds は1〜20件で指定してください")
+        List<@NotNull @Positive(message = "documentIds は正の数で指定してください") Long> documentIds
     ) {
+        public SearchQueryRequest(String query, Integer topK, Double similarityThreshold) {
+            this(query, topK, similarityThreshold, null);
+        }
+
+        @AssertTrue(message = "documentIds に重複した ID は指定できません")
+        public boolean isDocumentIdsUnique() {
+            return documentIds == null || new HashSet<>(documentIds).size() == documentIds.size();
+        }
+
         public int getEffectiveTopK() {
             return (topK == null || topK <= 0) ? 5 : topK;
         }
@@ -65,8 +82,20 @@ public class SearchDTOs {
         @NotBlank(message = "質問は必須です (Question is required)")
         String question,
 
-        Integer topK
+        Integer topK,
+
+        @Size(min = 1, max = 20, message = "documentIds は1〜20件で指定してください")
+        List<@NotNull @Positive(message = "documentIds は正の数で指定してください") Long> documentIds
     ) {
+        public AskRequest(String question, Integer topK) {
+            this(question, topK, null);
+        }
+
+        @AssertTrue(message = "documentIds に重複した ID は指定できません")
+        public boolean isDocumentIdsUnique() {
+            return documentIds == null || new HashSet<>(documentIds).size() == documentIds.size();
+        }
+
         public int getEffectiveTopK() {
             return (topK == null || topK <= 0) ? 5 : topK;
         }

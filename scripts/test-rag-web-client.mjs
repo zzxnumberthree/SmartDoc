@@ -8,7 +8,9 @@ assert.ok(script, 'dedicated RAG client script must exist');
 assert.ok(!script.includes('innerHTML'), 'RAG renderer must not use innerHTML');
 new vm.Script(script, { filename: 'ragWebClient' });
 for (const id of ['ragQuestionInput', 'ragTopKInput', 'ragThresholdInput', 'ragSearchButton',
-    'ragAskButton', 'ragStatus', 'ragAnswer', 'ragSources', 'ragPreviewSection',
+    'ragAskButton', 'ragStatus', 'ragDocumentScopeAll', 'ragDocumentScopeSelected',
+    'ragDocumentScopePicker', 'ragDocumentRefreshButton', 'ragDocumentListStatus', 'ragDocumentList',
+    'ragDocumentCount', 'ragAnswer', 'ragSources', 'ragPreviewSection',
     'ragPreviewTitle', 'ragPreviewStatus', 'ragPreviewExcerpt', 'ragPreviewFrame', 'ragPreviewText', 'ragPreviewClose']) {
     assert.ok(html.includes(`id="${id}"`), `${id} must exist in the page`);
 }
@@ -21,6 +23,9 @@ class Element {
         this.className = '';
         this.disabled = false;
         this.value = '';
+        this.checked = false;
+        this.type = '';
+        this.htmlFor = '';
         this._text = '';
         this.classList = {
             add: name => { this.className = [...new Set([...this.className.split(/\s+/), name])].join(' ').trim(); },
@@ -53,12 +58,15 @@ class Element {
 function setup(fetchResponse) {
     const ids = ['ragQuestionInput', 'ragTopKInput', 'ragThresholdInput', 'ragSearchButton',
         'ragAskButton', 'ragStatus', 'ragAnswerSection', 'ragAnswer', 'ragSourcesSection', 'ragSources',
+        'ragDocumentScopeAll', 'ragDocumentScopeSelected', 'ragDocumentScopePicker',
+        'ragDocumentRefreshButton', 'ragDocumentListStatus', 'ragDocumentCount', 'ragDocumentList',
         'ragPreviewSection', 'ragPreviewTitle', 'ragPreviewStatus', 'ragPreviewFrame',
         'ragPreviewExcerpt', 'ragPreviewText', 'ragPreviewClose'];
     const elements = Object.fromEntries(ids.map(id => [id, new Element(id.endsWith('Button') ? 'button' : 'div')]));
     elements.ragQuestionInput.value = '  quarterly plan  ';
     elements.ragTopKInput.value = '4';
     elements.ragThresholdInput.value = '0.42';
+    elements.ragDocumentScopeAll.checked = true;
     const calls = [];
     let token = 'fixture-token';
     let reloads = 0;
@@ -91,6 +99,20 @@ function jsonResponse(data, status = 200) {
     return { ok: status >= 200 && status < 300, status, json: async () => ({ data }) };
 }
 
+function documentListResponse(documents, status = 200) {
+    return jsonResponse(documents, status);
+}
+
+function setSelectedMode(client) {
+    client.elements.ragDocumentScopeAll.checked = false;
+    client.elements.ragDocumentScopeSelected.checked = true;
+    return client.elements.ragDocumentScopeSelected.listeners.change();
+}
+
+function checkboxes(client) {
+    return client.elements.ragDocumentList.children.map(row => row.children[0]);
+}
+
 const searchResult = {
     documentId: 19,
     documentTitle: '<img src=x onerror=alert(1)>.pdf',
@@ -110,6 +132,8 @@ assert.equal(search.calls[0].options.headers.Authorization, 'Bearer fixture-toke
 assert.deepEqual(JSON.parse(search.calls[0].options.body), {
     query: 'quarterly plan', topK: 4, similarityThreshold: 0.42
 });
+assert.ok(!Object.hasOwn(JSON.parse(search.calls[0].options.body), 'documentIds'),
+    'all-my-documents is the default and keeps the legacy request body');
 const sourceCard = search.elements.ragSources.children[0];
 assert.match(sourceCard.textContent, /<img src=x onerror=alert\(1\)>\.pdf · Chunk 3 · 第 4 页/);
 assert.match(sourceCard.textContent, /相似度分数: 0\.876/);
@@ -168,6 +192,7 @@ const ask = setup(() => jsonResponse({ answer: askAnswer, sources: [searchResult
 await ask.elements.ragAskButton.listeners.click();
 assert.equal(ask.calls[0].url, '/api/search/ask');
 assert.deepEqual(JSON.parse(ask.calls[0].options.body), { question: 'quarterly plan', topK: 4 });
+assert.match(ask.elements.ragStatus.textContent, /范围：全部我的文档/);
 assert.equal(ask.elements.ragAnswer.textContent, askAnswer);
 assert.equal(ask.elements.ragAnswer.children.length, 0, 'answer must render as text');
 assert.equal(ask.elements.ragSources.children.length, 1);
@@ -207,4 +232,138 @@ assert.equal(stale.elements.ragAnswer.textContent, 'new response');
 assert.ok(!stale.elements.ragSources.textContent.includes('stale response'),
     'a late response must not replace newer results');
 
-console.log('RAG web client request, rendering, empty/error, and text-safety contracts passed');
+const scopedSearch = setup((url) => url === '/api/documents/me'
+    ? documentListResponse([
+        { id: 31, fileName: '<img src=x onerror=alert(1)>.pdf' },
+        { id: 31, fileName: 'duplicate should be ignored.pdf' },
+        { id: 32, fileName: 'notes.txt' }
+    ])
+    : jsonResponse([searchResult]));
+await setSelectedMode(scopedSearch);
+assert.equal(scopedSearch.calls[0].url, '/api/documents/me');
+assert.equal(scopedSearch.calls[0].options.headers.Authorization, 'Bearer fixture-token');
+assert.equal(scopedSearch.elements.ragDocumentList.children.length, 2, 'document IDs are deduplicated');
+assert.equal(scopedSearch.elements.ragDocumentList.children[0].children[1].textContent,
+    '<img src=x onerror=alert(1)>.pdf · #31', 'document filenames render as text');
+assert.equal(scopedSearch.elements.ragDocumentList.children[0].children[1].children.length, 0,
+    'document titles must not parse HTML');
+assert.equal(scopedSearch.elements.ragSearchButton.disabled, true, 'selected scope requires at least one document');
+const scopedCheckboxes = checkboxes(scopedSearch);
+scopedCheckboxes[0].checked = true;
+scopedCheckboxes[0].listeners.change();
+assert.equal(scopedSearch.elements.ragSearchButton.disabled, false);
+await scopedSearch.elements.ragSearchButton.listeners.click();
+assert.deepEqual(JSON.parse(scopedSearch.calls[1].options.body), {
+    query: 'quarterly plan', topK: 4, similarityThreshold: 0.42, documentIds: [31]
+});
+assert.match(scopedSearch.elements.ragStatus.textContent, /范围：已选择 1 份文档/);
+
+const scopedAsk = setup(url => url === '/api/documents/me'
+    ? documentListResponse([{ id: 41, fileName: 'one.pdf' }, { id: 42, fileName: 'two.pdf' }])
+    : jsonResponse({ answer: 'scoped answer', sources: [searchResult] }));
+await setSelectedMode(scopedAsk);
+for (const checkbox of checkboxes(scopedAsk)) {
+    checkbox.checked = true;
+    checkbox.listeners.change();
+}
+await scopedAsk.elements.ragAskButton.listeners.click();
+assert.deepEqual(JSON.parse(scopedAsk.calls[1].options.body), {
+    question: 'quarterly plan', topK: 4, documentIds: [41, 42]
+});
+assert.match(scopedAsk.elements.ragStatus.textContent, /范围：已选择 2 份文档/);
+
+const invalidScope = setup(url => url === '/api/documents/me'
+    ? documentListResponse([{ id: 51, fileName: 'one.pdf' }])
+    : jsonResponse([searchResult]));
+await setSelectedMode(invalidScope);
+assert.equal(invalidScope.elements.ragAskButton.disabled, true, 'no selected documents disables ask');
+const invalidCheckbox = checkboxes(invalidScope)[0];
+invalidCheckbox.checked = true;
+invalidCheckbox.value = '0';
+invalidCheckbox.listeners.change();
+assert.equal(invalidScope.elements.ragAskButton.disabled, true, 'invalid IDs disable selected-scope actions');
+await invalidScope.elements.ragAskButton.listeners.click();
+assert.equal(invalidScope.calls.filter(call => call.url === '/api/search/ask').length, 0,
+    'invalid selected IDs must not reach the request body');
+
+const listFailure = setup(url => url === '/api/documents/me'
+    ? jsonResponse(null, 500)
+    : jsonResponse([searchResult]));
+await setSelectedMode(listFailure);
+assert.match(listFailure.elements.ragDocumentListStatus.textContent, /HTTP 500/);
+assert.equal(listFailure.elements.ragSearchButton.disabled, true, 'failed document loading disables selected scope');
+assert.equal(listFailure.elements.ragDocumentRefreshButton.disabled, false, 'failed list can be retried');
+
+const listUnauthorized = setup(url => url === '/api/documents/me'
+    ? jsonResponse(null, 401)
+    : jsonResponse([searchResult]));
+await setSelectedMode(listUnauthorized);
+assert.match(listUnauthorized.elements.ragDocumentListStatus.textContent, /登录已过期/);
+assert.equal(listUnauthorized.getToken(), null, '401 while loading documents clears the stale token');
+assert.equal(listUnauthorized.getReloads(), 1, '401 while loading documents reopens the login flow');
+assert.equal(listUnauthorized.elements.ragAskButton.disabled, true);
+
+let releaseOldScopedSearch;
+const staleScope = setup(url => url === '/api/search/query'
+    ? new Promise(resolve => { releaseOldScopedSearch = resolve; })
+    : url === '/api/documents/me'
+        ? documentListResponse([{ id: 61, fileName: 'scoped.pdf' }])
+        : jsonResponse([searchResult]));
+const oldScopeRequest = staleScope.elements.ragSearchButton.listeners.click();
+await setSelectedMode(staleScope);
+const staleCheckbox = checkboxes(staleScope)[0];
+staleCheckbox.checked = true;
+staleCheckbox.listeners.change();
+releaseOldScopedSearch(jsonResponse([{ ...searchResult, content: 'stale all-documents result' }]));
+await oldScopeRequest;
+assert.ok(!staleScope.elements.ragSources.textContent.includes('stale all-documents result'),
+    'changing scope suppresses a response started under the previous scope');
+assert.equal(staleScope.elements.ragSearchButton.disabled, false,
+    'changing scope recovers the busy state after the stale request');
+
+let releaseOldAskBeforeRefresh;
+let refreshedListCount = 0;
+const refreshInvalidation = setup(url => {
+    if (url === '/api/documents/me') {
+        refreshedListCount++;
+        return documentListResponse([{ id: 65, fileName: 'refreshed.pdf' }]);
+    }
+    if (url === '/api/search/ask') return new Promise(resolve => { releaseOldAskBeforeRefresh = resolve; });
+    return jsonResponse([searchResult]);
+});
+await setSelectedMode(refreshInvalidation);
+const beforeRefreshCheckbox = checkboxes(refreshInvalidation)[0];
+beforeRefreshCheckbox.checked = true;
+beforeRefreshCheckbox.listeners.change();
+const oldAskBeforeRefresh = refreshInvalidation.elements.ragAskButton.listeners.click();
+await refreshInvalidation.elements.ragDocumentRefreshButton.listeners.click();
+assert.equal(refreshedListCount, 2);
+releaseOldAskBeforeRefresh(jsonResponse({ answer: 'stale answer before refresh', sources: [searchResult] }));
+await oldAskBeforeRefresh;
+assert.equal(refreshInvalidation.elements.ragAnswer.textContent, '',
+    'refreshing the document list invalidates an in-flight answer for the previous scope snapshot');
+assert.equal(refreshInvalidation.elements.ragAskButton.disabled, false,
+    'refreshing the list recovers the busy state after the stale ask');
+
+const listResolvers = [];
+const listRace = setup(url => url === '/api/documents/me'
+    ? new Promise(resolve => { listResolvers.push(resolve); })
+    : jsonResponse([searchResult]));
+const firstList = setSelectedMode(listRace);
+assert.equal(listRace.elements.ragSearchButton.disabled, true, 'list loading disables selected-scope actions');
+listRace.elements.ragDocumentScopeAll.checked = true;
+listRace.elements.ragDocumentScopeSelected.checked = false;
+listRace.elements.ragDocumentScopeAll.listeners.change();
+const secondList = setSelectedMode(listRace);
+assert.equal(listResolvers.length, 2);
+listResolvers[1](documentListResponse([{ id: 72, fileName: 'newer.pdf' }]));
+await secondList;
+listResolvers[0](documentListResponse([{ id: 71, fileName: 'older.pdf' }]));
+await firstList;
+assert.equal(listRace.elements.ragDocumentList.children.length, 1);
+assert.equal(listRace.elements.ragDocumentList.children[0].children[1].textContent, 'newer.pdf · #72',
+    'a late document-list response cannot replace the newer list');
+assert.match(listRace.elements.ragDocumentListStatus.textContent, /已加载 1 份文档/);
+assert.equal(listRace.elements.ragSearchButton.disabled, true, 'new list remains invalid until a document is checked');
+
+console.log('RAG web client scope selection, request, rendering, empty/error, race, and text-safety contracts passed');
